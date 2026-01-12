@@ -10,26 +10,85 @@ import traceback
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import google.api_core.exceptions
 
-# Re-use our existing modules
-from rag_sync.src.config import Config
-from rag_sync.src.ingestion import Processor
+# --- INLINE CONFIG & PROCESSOR (For Vercel Stability) ---
 
-load_dotenv()
+class Config:
+    GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE', 'credentials.json')
+    GOOGLE_DRIVE_FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
+    PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
+    PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME')
+    PINECONE_NAMESPACE = os.getenv('PINECONE_NAMESPACE', 'default')
+    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+    STATE_FILE_PATH = os.getenv('STATE_FILE_PATH', 'sync_state.json')
+    
+    # RAG Settings
+    CHUNK_SIZE = 3000
+    CHUNK_OVERLAP = 100
+    EMBEDDING_MODEL = 'models/text-embedding-004'
+
+    @classmethod
+    def validate(cls):
+        missing = []
+        # For server, we only need API keys and Index
+        if not cls.PINECONE_API_KEY: missing.append("PINECONE_API_KEY")
+        if not cls.PINECONE_INDEX_NAME: missing.append("PINECONE_INDEX_NAME")
+        if not cls.GOOGLE_API_KEY: missing.append("GOOGLE_API_KEY")
+        
+        if missing:
+            raise ValueError(f"Missing env vars: {', '.join(missing)}")
+
+class Processor:
+    def __init__(self, api_key: str):
+        genai.configure(api_key=api_key)
+
+    def embed_batch(self, batch):
+        """
+        Embed a list of strings using Google Gemini.
+        Returns a list of vectors (which are lists of floats).
+        """
+        try:
+            # Note: Input to embed_content with model 'models/text-embedding-004'
+            # should handle a list of strings.
+            # task_type="retrieval_document" is good for chunks to be stored.
+            # But for query we might use 'retrieval_query'.
+            # However, for consistency with ingestion, let's stick to what works or 'retrieval_query' for search.
+            
+            # Since this is for server query, let's use retrieval_query task type if possible, 
+            # or default if ingestion used default.
+            # Assuming ingestion used 'retrieval_document'.
+            
+            result = genai.embed_content(
+                model=Config.EMBEDDING_MODEL,
+                content=batch,
+                task_type="retrieval_query" 
+            )
+            
+            # result['embedding'] is a list of lists if input is a list
+            # and 'content' was passed as list.
+            return result['embedding']
+        except Exception as e:
+            print(f"Embedding failed: {e}")
+            return []
+
+# --- APP SETUP ---
+
+load_dotenv() # Load from .env if local
 
 app = FastAPI()
 
-# --- SETUP RAG ---
-Config.validate()
-pc = Pinecone(api_key=Config.PINECONE_API_KEY)
-index = pc.Index(Config.PINECONE_INDEX_NAME)
-processor = Processor(Config.GOOGLE_API_KEY)
-genai.configure(api_key=Config.GOOGLE_API_KEY)
-
-# Using gemini-2.0-flash as confirmed available
-chat_model = genai.GenerativeModel('models/gemini-2.0-flash') 
+# Validate config on import to fail fast if keys missing
+# Wrap in try-except to avoid crash during Vercel build phase if envs missing in build context
+try:
+    Config.validate()
+    pc = Pinecone(api_key=Config.PINECONE_API_KEY)
+    index = pc.Index(Config.PINECONE_INDEX_NAME)
+    processor = Processor(Config.GOOGLE_API_KEY)
+    genai.configure(api_key=Config.GOOGLE_API_KEY)
+    chat_model = genai.GenerativeModel('models/gemini-2.0-flash') 
+except Exception as e:
+    print(f"WARNING: Init failed (might be build phase): {e}")
 
 # Define retry logic specifically for Rate Limits (429)
-# Wait exponentially between 4s and 60s, trying up to 5 times.
 @retry(
     retry=retry_if_exception_type(google.api_core.exceptions.ResourceExhausted),
     stop=stop_after_attempt(5),
