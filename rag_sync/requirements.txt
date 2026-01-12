@@ -1,0 +1,12 @@
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+pinecone
+google-generativeai
+python-dotenv
+tenacity
+python-docx
+pypdf
+fastapi
+uvicorn
+pydantic
