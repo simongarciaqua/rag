@@ -91,10 +91,11 @@ async def chat(req: ChatRequest):
 
     except Exception as e:
         print(f"ERROR: {str(e)}")
-        # Detectamos errores comunes para dar mensajes más amigables
         error_msg = str(e)
         if "Unauthorized" in error_msg or "API Key" in error_msg:
-            friendly_err = "❌ Error de Autorización: Tu clave de Pinecone es inválida. Revísala en Vercel."
+            key = Config.PINECONE_API_KEY
+            masked_key = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "Muy corta"
+            friendly_err = f"❌ Error de Autorización: La clave [{masked_key}] es inválida para Pinecone. Compárala con tu .env."
         elif "ResourceExhausted" in error_msg:
             friendly_err = "⚠️ Límite excedido: El modelo de Google Gemini está saturado. Reintentando..."
         else:
