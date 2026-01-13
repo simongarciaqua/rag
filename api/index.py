@@ -22,11 +22,15 @@ class Config:
     @classmethod
     def validate(cls):
         missing = []
+        # Debug: list all environment keys found (to verify Vercel)
+        found_keys = [k for k in os.environ.keys() if "PINECONE" in k or "GOOGLE" in k]
+        
         if not cls.PINECONE_API_KEY: missing.append("PINECONE_API_KEY")
         if not cls.PINECONE_INDEX_NAME: missing.append("PINECONE_INDEX_NAME")
         if not cls.GOOGLE_API_KEY: missing.append("GOOGLE_API_KEY")
+        
         if missing:
-            raise ValueError(f"Faltan variables: {', '.join(missing)}")
+            raise ValueError(f"Faltan variables: {', '.join(missing)}. Vercel ve estas: {', '.join(found_keys)}")
 
 # --- APP ---
 app = FastAPI()
