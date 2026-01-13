@@ -66,10 +66,10 @@ async def chat(req: ChatRequest):
 async def home():
     return """
     <html>
-    <head><title>Aquaservice AI v2.6</title><script src="https://cdn.tailwindcss.com"></script></head>
+    <head><title>Aquaservice AI v2.7</title><script src="https://cdn.tailwindcss.com"></script></head>
     <body class="bg-slate-100 flex items-center justify-center h-screen">
         <div class="bg-white p-10 rounded-3xl shadow-2xl w-full max-w-lg">
-            <h1 class="text-3xl font-bold text-blue-900 mb-6">Aquaservice AI v2.6</h1>
+            <h1 class="text-3xl font-bold text-blue-900 mb-6">Aquaservice AI v2.7</h1>
             <div id="log" class="h-64 overflow-y-auto mb-4 border-b p-2 text-sm space-y-2"></div>
             <div class="flex gap-2">
                 <input id="q" class="flex-1 border p-3 rounded-full" placeholder="Escribe aquí...">
