@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import os
@@ -9,90 +9,90 @@ import re
 
 load_dotenv()
 
-def clean_env(val):
-    if not val: return ""
-    # Eliminamos CUALQUIER cosa que no sea un carácter de clave estándar
-    return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
-
-class Config:
-    PINECONE_API_KEY = clean_env(os.getenv('PINECONE_API_KEY'))
-    PINECONE_INDEX_NAME = clean_env(os.getenv('PINECONE_INDEX_NAME'))
-    GOOGLE_API_KEY = clean_env(os.getenv('GOOGLE_API_KEY'))
-
 app = FastAPI()
-
-@app.post("/api/chat")
-async def chat(req: ChatRequest):
-    try:
-        # DIAGNÓSTICO EN VIVO
-        pk = Config.PINECONE_API_KEY
-        masked = f"{pk[:8]}...{pk[-4:]}" if len(pk) > 12 else "ERROR: Clave demasiado corta"
-        
-        print(f"DEBUG: Intentando conectar con clave {masked} (Longitud: {len(pk)})")
-        
-        pc = Pinecone(api_key=pk)
-        index = pc.Index(Config.PINECONE_INDEX_NAME)
-        
-        # Prueba rápida: listar índices (aquí es donde suele dar el 401)
-        idx_list = [i.name for i in pc.list_indexes()]
-        
-        genai.configure(api_key=Config.GOOGLE_API_KEY)
-        model = genai.GenerativeModel('models/gemini-2.0-flash')
-        
-        res = genai.embed_content(model='models/text-embedding-004', content=req.message, task_type="retrieval_query")
-        results = index.query(vector=res['embedding'], top_k=3, include_metadata=True)
-        
-        context = "\n\n".join([m.metadata.get('text', '') for m in results.matches])
-        response = model.generate_content(f"Contexto: {context}\n\nPregunta: {req.message}")
-        
-        return {"answer": response.text}
-        
-    except Exception as e:
-        err_str = str(e).lower()
-        pk = Config.PINECONE_API_KEY
-        masked = f"{pk[:8]}...{pk[-4:]}" if len(pk) > 12 else "INVALIDA"
-        
-        if "unauthorized" in err_str or "401" in err_str:
-            return {"answer": f"❌ PINE_401: Pinecone rechaza esta clave.\n• Tu clave en Vercel es: {masked}\n• Longitud real: {len(pk)} caracteres.\n• Compara esto con tu .env local paso a paso."}
-        return {"answer": f"❌ Error: {str(e)}"}
 
 class ChatRequest(BaseModel):
     message: str
 
-@app.get("/", response_class=HTMLResponse)
-async def serve_ui():
-    return """
-<!DOCTYPE html>
-<html>
-<head><title>Aquaservice v2.4</title><script src="https://cdn.tailwindcss.com"></script></head>
-<body class="bg-gray-100 h-screen flex items-center justify-center">
-    <div class="bg-white p-8 rounded-3xl shadow-xl w-full max-w-lg border-t-8 border-blue-900">
-        <h1 class="text-2xl font-bold text-blue-900 mb-2">Aquaservice AI</h1>
-        <p class="text-xs text-gray-400 mb-6 font-mono">Build v2.4 (Security Clean)</p>
-        <div id="chat" class="h-64 overflow-y-auto mb-4 space-y-2 text-sm"></div>
-        <div class="flex gap-2">
-            <input id="input" class="flex-1 border p-3 rounded-full outline-none" placeholder="Pregunta algo...">
-            <button id="send" class="bg-blue-900 text-white px-6 py-2 rounded-full">Enviar</button>
-        </div>
-    </div>
-    <script>
-        const chat = document.getElementById('chat');
-        const input = document.getElementById('input');
-        const btn = document.getElementById('send');
-        btn.onclick = async () => {
-            const m = input.value; if(!m) return;
-            chat.innerHTML += `<div class="text-right text-blue-900"><b>Tú:</b> ${m}</div>`;
-            input.value = '';
-            const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:m})});
-            const d = await res.json();
-            chat.innerHTML += `<div class="bg-gray-50 p-3 rounded-xl"><b>AI:</b> ${d.answer}</div>`;
-            chat.scrollTop = chat.scrollHeight;
-        };
-    </script>
-</body>
-</html>
-"""
+def clean_key(val):
+    if not val: return ""
+    return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    try:
+        # Cargamos variables dentro de la función para mayor robustez
+        pc_key = clean_key(os.getenv('PINECONE_API_KEY'))
+        index_name = clean_key(os.getenv('PINECONE_INDEX_NAME'))
+        google_key = clean_key(os.getenv('GOOGLE_API_KEY'))
+
+        if not pc_key or not index_name or not google_key:
+            return {"answer": "❌ Error: Faltan variables de entorno en Vercel."}
+
+        # Inicialización perezosa
+        pc = Pinecone(api_key=pc_key)
+        index = pc.Index(index_name)
+        
+        genai.configure(api_key=google_key)
+        model = genai.GenerativeModel('models/gemini-2.0-flash')
+        
+        # Generar embedding
+        embed = genai.embed_content(
+            model='models/text-embedding-004',
+            content=req.message,
+            task_type="retrieval_query"
+        )
+        
+        # Query Pinecone
+        results = index.query(vector=embed['embedding'], top_k=3, include_metadata=True)
+        context = "\n\n".join([m.metadata.get('text', '') for m in results.matches])
+        
+        # Generar respuesta
+        prompt = f"Contesta usando este contexto:\n\n{context}\n\nPregunta: {req.message}"
+        response = model.generate_content(prompt)
+        
+        return {"answer": response.text}
+        
+    except Exception as e:
+        msg = str(e)
+        if "401" in msg or "Unauthorized" in msg:
+            k = clean_key(os.getenv('PINECONE_API_KEY'))
+            masked = f"{k[:10]}...{k[-5:]} (Len: {len(k)})"
+            return {"answer": f"❌ ERROR 401: Pinecone rechaza la clave.\nClave en Vercel: {masked}\nCompara esto con tu local."}
+        return {"answer": f"❌ Error: {msg}"}
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return """
+    <html>
+    <head><title>Aquaservice AI v2.6</title><script src="https://cdn.tailwindcss.com"></script></head>
+    <body class="bg-slate-100 flex items-center justify-center h-screen">
+        <div class="bg-white p-10 rounded-3xl shadow-2xl w-full max-w-lg">
+            <h1 class="text-3xl font-bold text-blue-900 mb-6">Aquaservice AI v2.6</h1>
+            <div id="log" class="h-64 overflow-y-auto mb-4 border-b p-2 text-sm space-y-2"></div>
+            <div class="flex gap-2">
+                <input id="q" class="flex-1 border p-3 rounded-full" placeholder="Escribe aquí...">
+                <button id="b" class="bg-blue-900 text-white px-6 py-2 rounded-full">Enviar</button>
+            </div>
+        </div>
+        <script>
+            const log = document.getElementById('log');
+            const q = document.getElementById('q');
+            const b = document.getElementById('b');
+            b.onclick = async () => {
+                const val = q.value; if(!val) return;
+                log.innerHTML += `<div><b>Tú:</b> ${val}</div>`;
+                q.value = '';
+                const r = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: val})
+                });
+                const d = await r.json();
+                log.innerHTML += `<div class="bg-gray-50 p-2 rounded"><b>AI:</b> ${d.answer}</div>`;
+                log.scrollTop = log.scrollHeight;
+            };
+        </script>
+    </body>
+    </html>
+    """
