@@ -10,6 +10,8 @@ import traceback
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import google.api_core.exceptions
 
+load_dotenv() # Load from .env before class definition
+
 # --- INLINE CONFIG & PROCESSOR (For Vercel Stability) ---
 
 class Config:
@@ -71,8 +73,6 @@ class Processor:
             return []
 
 # --- APP SETUP ---
-
-load_dotenv() # Load from .env if local
 
 app = FastAPI()
 
