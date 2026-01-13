@@ -6,25 +6,28 @@ import google.generativeai as genai
 from pinecone import Pinecone
 from dotenv import load_dotenv
 import traceback
+import re
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import google.api_core.exceptions
 
 load_dotenv()
 
-import re
-
 # --- CONFIG ---
 class Config:
     @staticmethod
-    def _clean(val):
-        if not val: return ""
-        # Elimina espacios, comillas y cualquier carácter NO imprimible (oculto)
-        return re.sub(r'[^\x21-\x7E]', '', val).strip("'\" ")
+    def _clean(val, name=""):
+        if not val: 
+            print(f"DEBUG: Variable {name} esta VACIA")
+            return ""
+        clean_val = re.sub(r'[^\x21-\x7E]', '', val).strip("'\" ")
+        # LOG DE SEGURIDAD PARA VER QUÉ LLEGA A VERCEL
+        print(f"DEBUG: Variable {name} cargada: {clean_val[:4]}...{clean_val[-4:]} (Longitud: {len(clean_val)})")
+        return clean_val
 
-    PINECONE_API_KEY = _clean(os.getenv('PINECONE_API_KEY'))
-    PINECONE_INDEX_NAME = _clean(os.getenv('PINECONE_INDEX_NAME'))
-    PINECONE_NAMESPACE = _clean(os.getenv('PINECONE_NAMESPACE', 'default'))
-    GOOGLE_API_KEY = _clean(os.getenv('GOOGLE_API_KEY'))
+    PINECONE_API_KEY = _clean(os.getenv('PINECONE_API_KEY'), "PINECONE_API_KEY")
+    PINECONE_INDEX_NAME = _clean(os.getenv('PINECONE_INDEX_NAME'), "PINECONE_INDEX_NAME")
+    PINECONE_NAMESPACE = _clean(os.getenv('PINECONE_NAMESPACE', 'default'), "PINECONE_NAMESPACE")
+    GOOGLE_API_KEY = _clean(os.getenv('GOOGLE_API_KEY'), "GOOGLE_API_KEY")
     EMBEDDING_MODEL = 'models/text-embedding-004'
 
     @classmethod
@@ -39,7 +42,6 @@ class Config:
 # --- APP ---
 app = FastAPI()
 
-# Definimos globales para reutilizar conexiones
 _pc_index = None
 _chat_model = None
 
@@ -54,11 +56,7 @@ def get_resources():
         _chat_model = genai.GenerativeModel('models/gemini-2.0-flash')
     return _pc_index, _chat_model
 
-@retry(
-    retry=retry_if_exception_type(google.api_core.exceptions.ResourceExhausted),
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10)
-)
+@retry(retry=retry_if_exception_type(google.api_core.exceptions.ResourceExhausted), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 def chat_with_gemini(chat_session, prompt):
     return chat_session.send_message(prompt)
 
@@ -69,144 +67,56 @@ class ChatRequest(BaseModel):
 async def chat(req: ChatRequest):
     try:
         index, model = get_resources()
-        
-        # 1. Embed
-        res = genai.embed_content(
-            model=Config.EMBEDDING_MODEL,
-            content=req.message,
-            task_type="retrieval_query"
-        )
+        res = genai.embed_content(model=Config.EMBEDDING_MODEL, content=req.message, task_type="retrieval_query")
         query_vector = res['embedding']
-
-        # 2. Search
-        results = index.query(
-            vector=query_vector,
-            top_k=5,
-            include_metadata=True,
-            namespace=Config.PINECONE_NAMESPACE
-        )
-
-        # 3. Context
+        results = index.query(vector=query_vector, top_k=5, include_metadata=True, namespace=Config.PINECONE_NAMESPACE)
         context = "\n\n".join([f"Fuente: {m.metadata.get('text', '')}" for m in results.matches])
         sources = [{"file_name": m.metadata.get('file_name', 'Doc'), "score": round(m.score, 3)} for m in results.matches]
-
-        # 4. Answer
         prompt = f"Contesta a esta pregunta usando este CONTEXTO:\n\n{context}\n\nPREGUNTA: {req.message}"
         chat_session = model.start_chat(history=[])
         response = chat_with_gemini(chat_session, prompt)
-
         return {"answer": response.text, "sources": sources}
-
     except Exception as e:
         print(f"ERROR: {str(e)}")
         error_msg = str(e)
         if "Unauthorized" in error_msg or "API Key" in error_msg:
-            key = Config.PINECONE_API_KEY
-            masked_key = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "Muy corta"
-            friendly_err = f"❌ Error de Autorización: La clave [{masked_key}] es inválida para Pinecone. Compárala con tu .env."
-        elif "ResourceExhausted" in error_msg:
-            friendly_err = "⚠️ Límite excedido: El modelo de Google Gemini está saturado. Reintentando..."
+            pk = Config.PINECONE_API_KEY
+            friendly_err = f"❌ Error de Autorización (Pinecone). La clave que ve Vercel es: {pk[:4]}...{pk[-4:]} (Longitud: {len(pk)}). Revísala."
         else:
             friendly_err = f"❌ Error: {error_msg}"
-            
         return {"answer": friendly_err, "sources": []}
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
     return """
 <!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aquaservice RAG</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Outfit', sans-serif; background-color: #f3f4f6; }
-        .bg-aquaservice { background-color: #002E7D; }
-        .typing-dot { animation: typing 1.4s infinite ease-in-out both; }
-        @keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
-    </style>
-</head>
-<body class="h-screen flex flex-col items-center justify-center p-4">
-
-    <div class="w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[85vh]">
-        <!-- Header -->
-        <div class="bg-aquaservice p-6 flex items-center justify-between">
-            <div class="flex items-center gap-3 text-white">
-                <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/></svg>
-                </div>
-                <div>
-                    <h1 class="font-semibold text-xl">Aquaservice AI</h1>
-                    <p class="text-blue-200 text-xs">Asistente Virtual Inteligente</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Chat Area -->
-        <div id="chat" class="flex-1 p-6 overflow-y-auto space-y-4 bg-gray-50">
-            <div class="flex gap-3">
-                <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs">AI</div>
-                <div class="bg-white p-3 rounded-2xl rounded-tl-none shadow-sm text-sm text-gray-700 border border-gray-100">
-                    ¡Hola! Soy el asistente de Aquaservice. ¿Qué información necesitas?
-                </div>
-            </div>
-        </div>
-
-        <!-- Input -->
-        <div class="p-4 bg-white border-t border-gray-100">
-            <div class="flex gap-2">
-                <input type="text" id="input" 
-                    class="flex-1 px-5 py-3 bg-gray-50 border border-gray-200 rounded-full text-sm outline-none focus:ring-2 focus:ring-blue-500/20"
-                    placeholder="Escribe tu pregunta...">
-                <button id="send" class="p-3 bg-aquaservice text-white rounded-full hover:bg-blue-800 transition-colors shadow-lg">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7-7 7M5 12h16"/></svg>
-                </button>
-            </div>
+<html>
+<head><title>Aquaservice AI</title><script src="https://cdn.tailwindcss.com"></script></head>
+<body class="p-8 flex justify-center bg-gray-100">
+    <div class="w-full max-w-lg bg-white rounded-xl shadow-lg p-6">
+        <h1 class="text-xl font-bold mb-4 text-blue-900 text-center">Aquaservice AI Chat</h1>
+        <div id="chat" class="h-80 overflow-y-auto mb-4 p-4 text-sm space-y-3 bg-gray-50 rounded-lg border"></div>
+        <div class="flex gap-2">
+            <input id="input" class="flex-1 border p-3 rounded-full outline-none focus:ring-2 focus:ring-blue-500" placeholder="Pregunta algo...">
+            <button id="send" class="bg-blue-900 text-white px-6 py-2 rounded-full hover:bg-blue-800 transition-colors">Enviar</button>
         </div>
     </div>
-
     <script>
         const chat = document.getElementById('chat');
         const input = document.getElementById('input');
         const btn = document.getElementById('send');
-
-        function appendMsg(who, text, isAi = false) {
-            const div = document.createElement('div');
-            div.className = `flex gap-3 ${who === 'Tú' ? 'flex-row-reverse' : ''}`;
-            div.innerHTML = `
-                <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${isAi ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-600'}">${who === 'AI' ? 'AI' : 'U'}</div>
-                <div class="${isAi ? 'bg-white text-gray-700 border border-gray-100' : 'bg-blue-900 text-white'} p-3 rounded-2xl ${isAi ? 'rounded-tl-none' : 'rounded-tr-none'} shadow-sm text-sm max-w-[80%]">
-                    ${text}
-                </div>
-            `;
-            chat.appendChild(div);
+        async function talk() {
+            const msg = input.value; if(!msg) return;
+            chat.innerHTML += `<div class="text-right"><span class="bg-blue-900 text-white p-2 rounded-lg inline-block">${msg}</span></div>`;
+            input.value = '';
+            try {
+                const res = await fetch('/api/chat', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message: msg})});
+                const data = await res.json();
+                chat.innerHTML += `<div class="text-left"><span class="bg-white border p-2 rounded-lg inline-block text-gray-800">${data.answer}</span></div>`;
+            } catch (e) { chat.innerHTML += `<div class="text-red-500 text-center">Error de conexión</div>`; }
             chat.scrollTop = chat.scrollHeight;
         }
-
-        async function talk() {
-            const msg = input.value.trim();
-            if(!msg) return;
-            appendMsg('Tú', msg);
-            input.value = '';
-
-            try {
-                const res = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({message: msg})
-                });
-                const data = await res.json();
-                appendMsg('AI', data.answer, true);
-            } catch (e) {
-                appendMsg('AI', '❌ Error de conexión al servidor.', true);
-            }
-        }
-
-        btn.onclick = talk;
-        input.onkeypress = (e) => { if(e.key === 'Enter') talk(); };
+        btn.onclick = talk; input.onkeypress = (e) => { if(e.key === 'Enter') talk(); };
     </script>
 </body>
 </html>
