@@ -15,6 +15,7 @@ class Config:
     @staticmethod
     def _clean(val):
         if not val: return ""
+        # Limpieza profunda de caracteres invisibles y espacios
         return re.sub(r'[^\x21-\x7E]', '', val).strip("'\" ")
 
     PINECONE_API_KEY = _clean(os.getenv('PINECONE_API_KEY'))
@@ -53,7 +54,7 @@ async def chat(req: ChatRequest):
         query_vector = res['embedding']
         results = index.query(vector=query_vector, top_k=5, include_metadata=True, namespace=Config.PINECONE_NAMESPACE)
         context = "\n\n".join([f"Fuente: {m.metadata.get('text', '')}" for m in results.matches])
-        prompt = f"Contesta usando este CONTEXTO:\n\n{context}\n\nPREGUNTA: {req.message}"
+        prompt = f"Eres un asistente de Aquaservice. Contesta usando este CONTEXTO:\n\n{context}\n\nPREGUNTA: {req.message}"
         chat_session = model.start_chat(history=[])
         response = chat_with_gemini(chat_session, prompt)
         return {"answer": response.text}
@@ -65,14 +66,27 @@ async def serve_ui():
     return """
 <!DOCTYPE html>
 <html>
-<head><title>Chat Aquaservice</title><script src="https://cdn.tailwindcss.com"></script></head>
-<body class="bg-blue-50 h-screen flex items-center justify-center p-4">
-    <div class="w-full max-w-xl bg-white rounded-2xl shadow-xl flex flex-col h-[80vh]">
-        <div class="bg-blue-900 p-4 text-white font-bold rounded-t-2xl">Aquaservice AI</div>
-        <div id="chat" class="flex-1 overflow-y-auto p-4 space-y-4 text-sm"></div>
-        <div class="p-4 border-t flex gap-2">
-            <input id="input" class="flex-1 border rounded-full px-4 outline-none focus:ring-2 focus:ring-blue-900" placeholder="Escribe tu duda...">
-            <button id="send" class="bg-blue-900 text-white p-2 rounded-full px-6">Enviar</button>
+<head><title>Aquaservice AI v2</title><script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-slate-100 h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-xl bg-white rounded-3xl shadow-2xl flex flex-col h-[85vh] border border-gray-100">
+        <div class="bg-[#002E7D] p-6 text-white rounded-t-3xl flex justify-between items-center">
+            <div>
+                <h1 class="font-bold text-xl">Aquaservice AI</h1>
+                <p class="text-blue-200 text-xs">Versión Desplegada v2</p>
+            </div>
+            <div class="w-3 h-3 bg-green-400 rounded-full shadow-[0_0_10px_#4ade80]"></div>
+        </div>
+        <div id="chat" class="flex-1 overflow-y-auto p-6 space-y-4 text-sm bg-gray-50">
+            <div class="flex gap-3">
+                <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-800 font-bold text-[10px]">AI</div>
+                <div class="bg-white p-3 rounded-2xl rounded-tl-none border shadow-sm text-gray-700">¡Bienvenido! Ya estoy conectado correctamente. ¿Qué quieres saber?</div>
+            </div>
+        </div>
+        <div class="p-4 bg-white border-t flex gap-2">
+            <input id="input" class="flex-1 bg-gray-50 border rounded-full px-5 py-3 outline-none focus:ring-2 focus:ring-blue-800 transition-all" placeholder="Escribe tu mensaje...">
+            <button id="send" class="bg-[#002E7D] text-white p-3 rounded-full hover:scale-105 active:scale-95 transition-all">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7-7 7M5 12h16"/></svg>
+            </button>
         </div>
     </div>
     <script>
@@ -80,12 +94,12 @@ async def serve_ui():
         const input = document.getElementById('input');
         const btn = document.getElementById('send');
         async function talk() {
-            const m = input.value; if(!m) return;
-            chat.innerHTML += `<div class="text-right"><span class="bg-blue-900 text-white p-2 rounded-lg inline-block">${m}</span></div>`;
-            input.value = '';
+            const m = input.value.trim(); if(!m) return;
+            chat.innerHTML += `<div class="flex flex-row-reverse gap-3"><div class="w-8 h-8 rounded-full bg-[#002E7D] flex items-center justify-center text-white font-bold text-[10px]">U</div><div class="bg-[#002E7D] text-white p-3 rounded-2xl rounded-tr-none shadow-md inline-block max-w-[80%]">${m}</div></div>`;
+            input.value = ''; chat.scrollTop = chat.scrollHeight;
             const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:m})});
             const d = await res.json();
-            chat.innerHTML += `<div class="text-left"><span class="bg-gray-100 p-2 rounded-lg inline-block text-gray-800">${d.answer}</span></div>`;
+            chat.innerHTML += `<div class="flex gap-3"><div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-800 font-bold text-[10px]">AI</div><div class="bg-white p-3 rounded-2xl rounded-tl-none border shadow-sm text-gray-700 inline-block max-w-[80%]">${d.answer}</div></div>`;
             chat.scrollTop = chat.scrollHeight;
         }
         btn.onclick = talk; input.onkeypress = (e) => { if(e.key === 'Enter') talk(); };
