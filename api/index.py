@@ -104,7 +104,27 @@ class ChatRequest(BaseModel):
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     try:
+        # Check if initialized
+        try:
+            Config.validate()
+        except ValueError as e:
+            return {
+                "answer": f"❌ **Error de Configuración**: Faltan las Variables de Entorno en Vercel ({e}). Por favor, añádelas en el panel de control de Vercel.",
+                "sources": []
+            }
+
         print(f"Received query: {req.message}")
+
+        # Ensure these are initialized (lazy init for Vercel)
+        global index, processor, chat_model
+        if 'index' not in globals():
+            pc = Pinecone(api_key=Config.PINECONE_API_KEY)
+            index = pc.Index(Config.PINECONE_INDEX_NAME)
+        if 'processor' not in globals():
+            processor = Processor(Config.GOOGLE_API_KEY)
+        if 'chat_model' not in globals():
+            genai.configure(api_key=Config.GOOGLE_API_KEY)
+            chat_model = genai.GenerativeModel('models/gemini-2.0-flash')
 
         # 1. Embed Query
         embeddings = processor.embed_batch([req.message])
