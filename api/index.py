@@ -6,102 +6,88 @@ import google.generativeai as genai
 from pinecone import Pinecone
 from dotenv import load_dotenv
 import re
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-import google.api_core.exceptions
 
 load_dotenv()
 
-# Función de limpieza fuera de la clase para evitar errores de staticmethod
 def clean_env(val):
     if not val: return ""
-    return re.sub(r'[^\x21-\x7E]', '', val).strip("'\" ")
+    # Eliminamos CUALQUIER cosa que no sea un carácter de clave estándar
+    return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
 
 class Config:
     PINECONE_API_KEY = clean_env(os.getenv('PINECONE_API_KEY'))
     PINECONE_INDEX_NAME = clean_env(os.getenv('PINECONE_INDEX_NAME'))
-    PINECONE_NAMESPACE = clean_env(os.getenv('PINECONE_NAMESPACE', 'default'))
     GOOGLE_API_KEY = clean_env(os.getenv('GOOGLE_API_KEY'))
-    EMBEDDING_MODEL = 'models/text-embedding-004'
 
 app = FastAPI()
-
-_pc_index = None
-_chat_model = None
-
-def get_resources():
-    global _pc_index, _chat_model
-    if _pc_index is None:
-        pc = Pinecone(api_key=Config.PINECONE_API_KEY)
-        _pc_index = pc.Index(Config.PINECONE_INDEX_NAME)
-    if _chat_model is None:
-        genai.configure(api_key=Config.GOOGLE_API_KEY)
-        _chat_model = genai.GenerativeModel('models/gemini-2.0-flash')
-    return _pc_index, _chat_model
-
-@retry(retry=retry_if_exception_type(google.api_core.exceptions.ResourceExhausted), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-def chat_with_gemini(chat_session, prompt):
-    return chat_session.send_message(prompt)
-
-class ChatRequest(BaseModel):
-    message: str
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     try:
-        index, model = get_resources()
-        res = genai.embed_content(model=Config.EMBEDDING_MODEL, content=req.message, task_type="retrieval_query")
-        query_vector = res['embedding']
-        results = index.query(vector=query_vector, top_k=5, include_metadata=True, namespace=Config.PINECONE_NAMESPACE)
-        context = "\n\n".join([f"Fuente: {m.metadata.get('text', '')}" for m in results.matches])
-        prompt = f"Eres un asistente de Aquaservice. Contesta usando este CONTEXTO:\n\n{context}\n\nPREGUNTA: {req.message}"
-        chat_session = model.start_chat(history=[])
-        response = chat_with_gemini(chat_session, prompt)
+        # DIAGNÓSTICO EN VIVO
+        pk = Config.PINECONE_API_KEY
+        masked = f"{pk[:8]}...{pk[-4:]}" if len(pk) > 12 else "ERROR: Clave demasiado corta"
+        
+        print(f"DEBUG: Intentando conectar con clave {masked} (Longitud: {len(pk)})")
+        
+        pc = Pinecone(api_key=pk)
+        index = pc.Index(Config.PINECONE_INDEX_NAME)
+        
+        # Prueba rápida: listar índices (aquí es donde suele dar el 401)
+        idx_list = [i.name for i in pc.list_indexes()]
+        
+        genai.configure(api_key=Config.GOOGLE_API_KEY)
+        model = genai.GenerativeModel('models/gemini-2.0-flash')
+        
+        res = genai.embed_content(model='models/text-embedding-004', content=req.message, task_type="retrieval_query")
+        results = index.query(vector=res['embedding'], top_k=3, include_metadata=True)
+        
+        context = "\n\n".join([m.metadata.get('text', '') for m in results.matches])
+        response = model.generate_content(f"Contexto: {context}\n\nPregunta: {req.message}")
+        
         return {"answer": response.text}
+        
     except Exception as e:
+        err_str = str(e).lower()
+        pk = Config.PINECONE_API_KEY
+        masked = f"{pk[:8]}...{pk[-4:]}" if len(pk) > 12 else "INVALIDA"
+        
+        if "unauthorized" in err_str or "401" in err_str:
+            return {"answer": f"❌ PINE_401: Pinecone rechaza esta clave.\n• Tu clave en Vercel es: {masked}\n• Longitud real: {len(pk)} caracteres.\n• Compara esto con tu .env local paso a paso."}
         return {"answer": f"❌ Error: {str(e)}"}
+
+class ChatRequest(BaseModel):
+    message: str
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
     return """
 <!DOCTYPE html>
 <html>
-<head><title>Aquaservice AI v2.2</title><script src="https://cdn.tailwindcss.com"></script></head>
-<body class="bg-slate-100 h-screen flex items-center justify-center p-4">
-    <div class="w-full max-w-xl bg-white rounded-3xl shadow-2xl flex flex-col h-[85vh] border border-gray-100">
-        <div class="bg-[#002E7D] p-6 text-white rounded-t-3xl flex justify-between items-center">
-            <div>
-                <h1 class="font-bold text-xl">Aquaservice AI</h1>
-                <p class="text-blue-200 text-xs">Versión Desplegada v2.2</p>
-            </div>
-            <div class="w-3 h-3 bg-green-400 rounded-full shadow-[0_0_10px_#4ade80]"></div>
-        </div>
-        <div id="chat" class="flex-1 overflow-y-auto p-6 space-y-4 text-sm bg-gray-50">
-            <div class="flex gap-3">
-                <div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-800 font-bold text-[10px]">AI</div>
-                <div class="bg-white p-3 rounded-2xl rounded-tl-none border shadow-sm text-gray-700">¡Bienvenido! Ya estoy conectado correctamente. ¿Qué quieres saber?</div>
-            </div>
-        </div>
-        <div class="p-4 bg-white border-t flex gap-2">
-            <input id="input" class="flex-1 bg-gray-50 border rounded-full px-5 py-3 outline-none focus:ring-2 focus:ring-blue-800 transition-all" placeholder="Escribe tu mensaje...">
-            <button id="send" class="bg-[#002E7D] text-white p-3 rounded-full hover:scale-105 active:scale-95 transition-all">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7-7 7M5 12h16"/></svg>
-            </button>
+<head><title>Aquaservice v2.4</title><script src="https://cdn.tailwindcss.com"></script></head>
+<body class="bg-gray-100 h-screen flex items-center justify-center">
+    <div class="bg-white p-8 rounded-3xl shadow-xl w-full max-w-lg border-t-8 border-blue-900">
+        <h1 class="text-2xl font-bold text-blue-900 mb-2">Aquaservice AI</h1>
+        <p class="text-xs text-gray-400 mb-6 font-mono">Build v2.4 (Security Clean)</p>
+        <div id="chat" class="h-64 overflow-y-auto mb-4 space-y-2 text-sm"></div>
+        <div class="flex gap-2">
+            <input id="input" class="flex-1 border p-3 rounded-full outline-none" placeholder="Pregunta algo...">
+            <button id="send" class="bg-blue-900 text-white px-6 py-2 rounded-full">Enviar</button>
         </div>
     </div>
     <script>
         const chat = document.getElementById('chat');
         const input = document.getElementById('input');
         const btn = document.getElementById('send');
-        async function talk() {
-            const m = input.value.trim(); if(!m) return;
-            chat.innerHTML += `<div class="flex flex-row-reverse gap-3"><div class="w-8 h-8 rounded-full bg-[#002E7D] flex items-center justify-center text-white font-bold text-[10px]">U</div><div class="bg-[#002E7D] text-white p-3 rounded-2xl rounded-tr-none shadow-md inline-block max-w-[80%]">${m}</div></div>`;
-            input.value = ''; chat.scrollTop = chat.scrollHeight;
+        btn.onclick = async () => {
+            const m = input.value; if(!m) return;
+            chat.innerHTML += `<div class="text-right text-blue-900"><b>Tú:</b> ${m}</div>`;
+            input.value = '';
             const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:m})});
             const d = await res.json();
-            chat.innerHTML += `<div class="flex gap-3"><div class="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-800 font-bold text-[10px]">AI</div><div class="bg-white p-3 rounded-2xl rounded-tl-none border shadow-sm text-gray-700 inline-block max-w-[80%]">${d.answer}</div></div>`;
+            chat.innerHTML += `<div class="bg-gray-50 p-3 rounded-xl"><b>AI:</b> ${d.answer}</div>`;
             chat.scrollTop = chat.scrollHeight;
-        }
-        btn.onclick = talk; input.onkeypress = (e) => { if(e.key === 'Enter') talk(); };
+        };
     </script>
 </body>
 </html>
