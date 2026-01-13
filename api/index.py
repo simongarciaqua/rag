@@ -13,10 +13,10 @@ load_dotenv()
 
 # --- CONFIG ---
 class Config:
-    PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
-    PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME')
-    PINECONE_NAMESPACE = os.getenv('PINECONE_NAMESPACE', 'default')
-    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+    PINECONE_API_KEY = os.getenv('PINECONE_API_KEY', '').strip()
+    PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME', '').strip()
+    PINECONE_NAMESPACE = os.getenv('PINECONE_NAMESPACE', 'default').strip()
+    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '').strip()
     EMBEDDING_MODEL = 'models/text-embedding-004'
 
     @classmethod
