@@ -16,6 +16,7 @@ class ChatRequest(BaseModel):
 
 def clean_key(val):
     if not val: return ""
+    # Eliminamos comillas accidentales y espacios
     return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
 
 @app.post("/api/chat")
