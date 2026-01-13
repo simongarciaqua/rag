@@ -11,12 +11,20 @@ import google.api_core.exceptions
 
 load_dotenv()
 
+import re
+
 # --- CONFIG ---
 class Config:
-    PINECONE_API_KEY = os.getenv('PINECONE_API_KEY', '').strip()
-    PINECONE_INDEX_NAME = os.getenv('PINECONE_INDEX_NAME', '').strip()
-    PINECONE_NAMESPACE = os.getenv('PINECONE_NAMESPACE', 'default').strip()
-    GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY', '').strip()
+    @staticmethod
+    def _clean(val):
+        if not val: return ""
+        # Elimina espacios, comillas y cualquier carácter NO imprimible (oculto)
+        return re.sub(r'[^\x21-\x7E]', '', val).strip("'\" ")
+
+    PINECONE_API_KEY = _clean(os.getenv('PINECONE_API_KEY'))
+    PINECONE_INDEX_NAME = _clean(os.getenv('PINECONE_INDEX_NAME'))
+    PINECONE_NAMESPACE = _clean(os.getenv('PINECONE_NAMESPACE', 'default'))
+    GOOGLE_API_KEY = _clean(os.getenv('GOOGLE_API_KEY'))
     EMBEDDING_MODEL = 'models/text-embedding-004'
 
     @classmethod
