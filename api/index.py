@@ -11,17 +11,16 @@ import google.api_core.exceptions
 
 load_dotenv()
 
-class Config:
-    @staticmethod
-    def _clean(val):
-        if not val: return ""
-        # Limpieza profunda de caracteres invisibles y espacios
-        return re.sub(r'[^\x21-\x7E]', '', val).strip("'\" ")
+# Función de limpieza fuera de la clase para evitar errores de staticmethod
+def clean_env(val):
+    if not val: return ""
+    return re.sub(r'[^\x21-\x7E]', '', val).strip("'\" ")
 
-    PINECONE_API_KEY = _clean(os.getenv('PINECONE_API_KEY'))
-    PINECONE_INDEX_NAME = _clean(os.getenv('PINECONE_INDEX_NAME'))
-    PINECONE_NAMESPACE = _clean(os.getenv('PINECONE_NAMESPACE', 'default'))
-    GOOGLE_API_KEY = _clean(os.getenv('GOOGLE_API_KEY'))
+class Config:
+    PINECONE_API_KEY = clean_env(os.getenv('PINECONE_API_KEY'))
+    PINECONE_INDEX_NAME = clean_env(os.getenv('PINECONE_INDEX_NAME'))
+    PINECONE_NAMESPACE = clean_env(os.getenv('PINECONE_NAMESPACE', 'default'))
+    GOOGLE_API_KEY = clean_env(os.getenv('GOOGLE_API_KEY'))
     EMBEDDING_MODEL = 'models/text-embedding-004'
 
 app = FastAPI()
@@ -66,13 +65,13 @@ async def serve_ui():
     return """
 <!DOCTYPE html>
 <html>
-<head><title>Aquaservice AI v2</title><script src="https://cdn.tailwindcss.com"></script></head>
+<head><title>Aquaservice AI v2.2</title><script src="https://cdn.tailwindcss.com"></script></head>
 <body class="bg-slate-100 h-screen flex items-center justify-center p-4">
     <div class="w-full max-w-xl bg-white rounded-3xl shadow-2xl flex flex-col h-[85vh] border border-gray-100">
         <div class="bg-[#002E7D] p-6 text-white rounded-t-3xl flex justify-between items-center">
             <div>
                 <h1 class="font-bold text-xl">Aquaservice AI</h1>
-                <p class="text-blue-200 text-xs">Versión Desplegada v2</p>
+                <p class="text-blue-200 text-xs">Versión Desplegada v2.2</p>
             </div>
             <div class="w-3 h-3 bg-green-400 rounded-full shadow-[0_0_10px_#4ade80]"></div>
         </div>
