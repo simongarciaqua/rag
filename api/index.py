@@ -70,9 +70,7 @@ async def chat(req: ChatRequest):
             gemini_history.append({"role": "user" if m.role == "user" else "model", "parts": [m.content]})
         
         chat_session = model.start_chat(history=gemini_history)
-        
         system_instr = f"Eres un asistente de Aquaservice. Contexto manuales:\n{context}\n\nResponde a la pregunta del usuario. Si no está en el contexto, usa tu conocimiento general pero avisa."
-        
         response = chat_session.send_message(f"{system_instr}\n\nPregunta: {req.message}")
         
         return {
@@ -87,36 +85,68 @@ async def chat(req: ChatRequest):
 @app.get("/", response_class=HTMLResponse)
 async def home():
     return """
-    <html>
+    <!DOCTYPE html>
+    <html lang="es">
     <head>
-        <title>Aquaservice AI v3.3</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <title>Aquaservice AI v3.4 Mobile</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
         <style>
-            body { font-family: 'Outfit', sans-serif; }
+            body { font-family: 'Outfit', sans-serif; -webkit-tap-highlight-color: transparent; }
             .dot { animation: pulse 1.4s infinite; }
             @keyframes pulse { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+            
+            /* Suavizar scroll en iOS */
+            .custom-scroll { -webkit-overflow-scrolling: touch; }
+            
+            /* Ajuste para teclados móviles */
+            @media (max-height: 500px) {
+                h1 { display: none; }
+                .p-6 { padding: 1rem; }
+            }
         </style>
     </head>
-    <body class="bg-slate-100 flex items-center justify-center min-h-screen p-4">
-        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-2xl flex flex-col h-[85vh] overflow-hidden">
-            <div class="bg-[#002E7D] p-6 text-white flex justify-between items-center shrink-0">
+    <body class="bg-gray-100 h-screen flex flex-col md:items-center md:justify-center md:p-4">
+        
+        <!-- Contenedor Principal -->
+        <div class="bg-white flex-1 md:flex-none w-full md:max-w-2xl flex flex-col md:h-[85vh] md:rounded-3xl shadow-2xl overflow-hidden">
+            
+            <!-- Header Móvil Optimizado -->
+            <div class="bg-[#002E7D] p-4 md:p-6 text-white flex justify-between items-center shrink-0 shadow-lg z-10">
                 <div class="flex items-center gap-3">
-                    <span class="text-2xl">💧</span>
+                    <div class="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center text-xl">💧</div>
                     <div>
-                        <h1 class="text-xl font-bold">Aquaservice AI</h1>
-                        <p class="text-blue-200 text-[10px] uppercase">Memoria v3.3</p>
+                        <h1 class="text-lg md:text-xl font-bold leading-tight">Aquaservice AI</h1>
+                        <p class="text-blue-200 text-[10px] uppercase font-semibold tracking-tighter">Asistente Inteligente v3.4</p>
                     </div>
                 </div>
             </div>
-            <div id="log" class="flex-1 overflow-y-auto p-6 space-y-6 bg-gray-50/50"></div>
-            <div id="typing" class="hidden px-6 py-2 flex gap-2 items-center text-blue-500 text-xs">
-                <span>Aquaservice está pensando</span>
-                <span class="dot">.</span><span class="dot" style="animation-delay: 0.2s">.</span><span class="dot" style="animation-delay: 0.4s">.</span>
+
+            <!-- Área de Chat -->
+            <div id="log" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6 bg-gray-50/50 custom-scroll">
+                <!-- Los mensajes se inyectan aquí -->
             </div>
-            <div class="p-6 bg-white border-t flex gap-3 items-center shrink-0">
-                <input id="q" class="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-5 py-4 outline-none focus:ring-2 focus:ring-blue-800" placeholder="Escribe tu duda...">
-                <button id="b" class="bg-[#002E7D] text-white p-4 rounded-2xl shadow-lg">Enviar</button>
+
+            <!-- Indicador de Carga -->
+            <div id="typing" class="hidden px-6 py-2 flex gap-2 items-center text-[#002E7D] text-xs font-medium">
+                <span class="bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
+                    Escribiendo<span class="dot">.</span><span class="dot" style="animation-delay: 0.2s">.</span><span class="dot" style="animation-delay: 0.4s">.</span>
+                </span>
+            </div>
+
+            <!-- Input y Botón -->
+            <div class="p-4 md:p-6 bg-white border-t border-gray-100 flex gap-2 md:gap-3 items-center shrink-0">
+                <input id="q" type="text" enterkeyhint="send" autocomplete="off"
+                    class="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 md:py-4 outline-none focus:ring-2 focus:ring-[#002E7D] text-sm transition-all" 
+                    placeholder="Escribe tu mensaje...">
+                
+                <button id="b" class="bg-[#002E7D] text-white p-3 md:p-4 rounded-2xl shadow-lg active:scale-90 transition-transform flex items-center justify-center">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path d="M14 5l7 7-7 7M5 12h16" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
             </div>
         </div>
 
@@ -128,24 +158,27 @@ async def home():
             const typing = document.getElementById('typing');
 
             function addMsg(text, isUser, sources = []) {
-                const div = document.createElement('div');
-                div.className = isUser ? "flex flex-row-reverse gap-3" : "flex gap-3";
+                const wrapper = document.createElement('div');
+                wrapper.className = isUser ? "flex flex-row-reverse gap-2 md:gap-3" : "flex gap-2 md:gap-3";
                 
-                let sHtml = sources.length ? `
-                    <div class="mt-2 text-[10px] text-blue-400 font-bold border-t pt-1">
-                        Fuentes: ${sources.map(s => s.name).join(', ')}
+                let sourceList = sources.length ? `
+                    <div class="mt-2 text-[10px] text-blue-500 font-bold border-t border-blue-50 pt-1.5 flex flex-wrap gap-1">
+                        ${sources.map(s => `<span class="bg-blue-50 px-2 py-0.5 rounded">📄 ${s.name}</span>`).join('')}
                     </div>` : "";
 
-                div.innerHTML = `
-                    <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold text-[10px] ${isUser?'bg-blue-900 text-white':'bg-blue-100 text-blue-800'}">${isUser?'U':'AI'}</div>
-                    <div class="${isUser?'bg-blue-900 text-white':'bg-white border text-gray-700'} p-4 rounded-2xl shadow-sm text-sm max-w-[80%]">
+                wrapper.innerHTML = `
+                    <div class="w-8 h-8 md:w-9 md:h-9 rounded-full flex items-center justify-center font-bold text-[10px] shrink-0 shadow-sm ${isUser?'bg-[#002E7D] text-white':'bg-white border text-[#002E7D]'}">
+                        ${isUser?'U':'AI'}
+                    </div>
+                    <div class="${isUser?'bg-[#002E7D] text-white rounded-tr-none':'bg-white border border-gray-100 text-gray-700 rounded-tl-none'} p-3 md:p-4 rounded-2xl shadow-sm text-sm md:text-base max-w-[85%] leading-relaxed">
                         ${text.replace(/\\n/g, '<br>')}
-                        ${sHtml}
+                        ${sourceHtml = sources.length ? sourceList : ""}
                     </div>
                 `;
-                log.appendChild(div);
+                log.appendChild(wrapper);
                 log.scrollTop = log.scrollHeight;
-                history.push({role: isUser ? "user" : "assistant", content: text});
+                if(!isUser) history.push({role: "assistant", content: text});
+                else history.push({role: "user", content: text});
             }
 
             async function ask() {
@@ -153,6 +186,7 @@ async def home():
                 addMsg(val, true);
                 q.value = '';
                 typing.classList.remove('hidden');
+                log.scrollTop = log.scrollHeight;
 
                 try {
                     const res = await fetch('/api/chat', {
@@ -165,13 +199,19 @@ async def home():
                     addMsg(data.answer, false, data.sources);
                 } catch(e) {
                     typing.classList.add('hidden');
-                    addMsg("Error de conexión", false);
+                    addMsg("Vaya, parece que hay un problema de conexión. Inténtalo de nuevo.", false);
                 }
             }
 
             b.onclick = ask;
             q.onkeypress = (e) => { if(e.key === 'Enter') ask(); };
-            window.onload = () => addMsg("¡Hola! Ya estoy listo y con memoria activa. ¿En qué puedo ayudarte?", false);
+            
+            // Auto-focus en desktop, evitar que salte teclado en móvil al cargar
+            if(window.innerWidth > 768) q.focus();
+
+            window.onload = () => {
+                setTimeout(() => addMsg("¡Hola! He activado el modo móvil. ¿En qué puedo ayudarte hoy?", false), 100);
+            };
         </script>
     </body>
     </html>
