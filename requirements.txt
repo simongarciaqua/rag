@@ -10,3 +10,4 @@ pypdf
 fastapi
 uvicorn
 pydantic
+httpx

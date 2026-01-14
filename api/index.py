@@ -6,6 +6,8 @@ import google.generativeai as genai
 from pinecone import Pinecone
 from dotenv import load_dotenv
 import re
+import httpx
+import json
 from typing import List, Optional
 
 load_dotenv()
@@ -25,6 +27,18 @@ def clean_key(val):
     if '=' in val: val = val.split('=')[-1]
     return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
 
+async def call_salesforce_n8n(query: str):
+    url = "https://simongpa11.app.n8n.cloud/webhook/salesforce-users"
+    async with httpx.AsyncClient() as client:
+        try:
+            # Enviamos la consulta al webhook de n8n
+            response = await client.post(url, json={"query": query}, timeout=10.0)
+            if response.status_code == 200:
+                return response.json()
+            return {"error": f"Error API: {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     try:
@@ -38,44 +52,73 @@ async def chat(req: ChatRequest):
         genai.configure(api_key=google_key)
         model = genai.GenerativeModel('models/gemini-2.0-flash')
         
-        search_query = req.message
-        if req.history:
-            history_summary = "\n".join([f"{m.role}: {m.content}" for m in req.history[-3:]])
-            rewrite_prompt = f"Basado en este historial de chat:\n{history_summary}\n\nConvierte esta última pregunta en una frase de búsqueda para manuales: '{req.message}'. Responde SOLO la frase."
-            search_query = model.generate_content(rewrite_prompt).text.strip()
+        # --- 1. DETECCIÓN DE INTENCIÓN ---
+        # Decidimos si es RAG (Manuales) o SALESFORCE (Datos de usuario)
+        history_summary = "\n".join([f"{m.role}: {m.content}" for m in req.history[-3:]])
+        intent_prompt = f"""Historial: {history_summary}\nPregunta: {req.message}\n
+        Analiza si el usuario pregunta por:
+        A) Información general, técnica o de procesos (ej: como limpiar, que es Aquaservice, productos).
+        B) Información personal, de su cuenta, sus facturas o datos de Salesforce (ej: mis datos, mi última factura, quien soy).
+        Responde SOLO con la letra 'A' o 'B'."""
+        
+        intent_res = model.generate_content(intent_prompt).text.strip()
+        is_salesforce = 'B' in intent_res
 
-        embed = genai.embed_content(model='models/text-embedding-004', content=search_query, task_type="retrieval_query")
-        results = index.query(vector=embed['embedding'], top_k=5, include_metadata=True, namespace=pc_namespace)
-        
-        context_parts = []
+        context_data = ""
         sources = []
-        seen_files = set()
-        for match in results.matches:
-            if match.score > 0.4:
-                text = match.metadata.get('text', '')
-                f_name = match.metadata.get('file_name', 'Archivo')
-                if text:
-                    context_parts.append(text)
-                    if f_name not in seen_files:
-                        sources.append({"name": f_name, "score": round(match.score * 100, 1)})
-                        seen_files.add(f_name)
-        
-        context = "\n\n".join(context_parts)
+        source_type = "RAG"
+
+        if is_salesforce:
+            # --- RUTA B: SALESFORCE (n8n) ---
+            sf_data = await call_salesforce_n8n(req.message)
+            context_data = f"DATOS DE SALESFORCE (FACTURAS/USUARIO):\n{json.dumps(sf_data, indent=2)}"
+            source_type = "Salesforce"
+            sources = [{"name": "Salesforce API", "score": 100}]
+        else:
+            # --- RUTA A: RAG (Pinecone) ---
+            search_query = req.message
+            if req.history:
+                rewrite_prompt = f"Convierte esta pregunta en una búsqueda para manuales: '{req.message}'. SOLO la búsqueda."
+                search_query = model.generate_content(rewrite_prompt).text.strip()
+
+            embed = genai.embed_content(model='models/text-embedding-004', content=search_query, task_type="retrieval_query")
+            results = index.query(vector=embed['embedding'], top_k=5, include_metadata=True, namespace=pc_namespace)
+            
+            cp = []
+            seen = set()
+            for m in results.matches:
+                if m.score > 0.4:
+                    t = m.metadata.get('text', '')
+                    f = m.metadata.get('file_name', 'Manual')
+                    if t:
+                        cp.append(t)
+                        if f not in seen:
+                            sources.append({"name": f, "score": round(m.score * 100, 1)})
+                            seen.add(f)
+            context_data = "\n\n".join(cp)
+
+        # --- 3. RESPUESTA FINAL ---
         gemini_history = []
         for m in req.history:
             gemini_history.append({"role": "user" if m.role == "user" else "model", "parts": [m.content]})
         
         chat_session = model.start_chat(history=gemini_history)
-        system_instr = f"Eres un asistente de Aquaservice. Contexto manuales:\n{context}\n\nResponde a la pregunta del usuario. Usa SOLO el contexto si es posible."
+        system_instr = f"""Eres un asistente de Aquaservice. 
+        Hoy tienes acceso a esta información recuperada de {source_type}:
+        {context_data}
+        
+        Usa estos datos para responder. Si no hay datos relevantes, intenta ayudar con lo que sepas pero indica que no encontraste información específica."""
+        
         response = chat_session.send_message(f"{system_instr}\n\nPregunta: {req.message}")
         
         return {
-            "answer": response.text if response.text else "No pude generar respuesta.",
-            "rag": len(context_parts) > 0,
+            "answer": response.text,
+            "rag": not is_salesforce,
+            "salesforce": is_salesforce,
             "sources": sources
         }
     except Exception as e:
-        return {"answer": f"❌ Error: {str(e)}", "rag": False, "sources": []}
+        return {"answer": f"❌ Error en el sistema: {str(e)}", "rag": False, "sources": []}
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -85,60 +128,40 @@ async def home():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-        <title>Aquaservice AI v3.6</title>
+        <title>Aquaservice AI v4.0 (RAG + Salesforce)</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
         <style>
-            body { 
-                font-family: 'Outfit', sans-serif; 
-                height: 100dvh;
-                overscroll-behavior: none;
-            }
+            body { font-family: 'Outfit', sans-serif; height: 100dvh; overscroll-behavior: none; }
             .dot { animation: pulse 1.4s infinite; }
             @keyframes pulse { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
-            
-            .custom-scroll { -webkit-overflow-scrolling: touch; }
-            .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
-
-            /* Tooltip mejorado */
             .tooltip { visibility: hidden; opacity: 0; transition: opacity 0.2s; position: absolute; bottom: 120%; right: 0; width: 200px; }
             .has-tooltip:hover .tooltip { visibility: visible; opacity: 1; }
         </style>
     </head>
     <body class="bg-gray-100 flex flex-col items-center">
-        
         <div class="bg-white w-full md:max-w-2xl flex flex-col h-full md:h-[90vh] md:mt-8 md:rounded-3xl shadow-2xl overflow-hidden relative">
             
-            <!-- Header -->
             <div class="bg-[#002E7D] p-4 md:p-6 text-white flex justify-between items-center shrink-0 z-30">
                 <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl">💧</div>
+                    <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl">🚀</div>
                     <div>
                         <h1 class="text-base md:text-xl font-bold leading-tight">Aquaservice AI</h1>
-                        <p class="text-blue-200 text-[10px] uppercase font-semibold">v3.6 Full Features</p>
+                        <p class="text-blue-200 text-[10px] uppercase font-semibold">v4.0 Híbrido (RAG + Salesforce)</p>
                     </div>
                 </div>
+                <div id="source-badge" class="text-[9px] px-2 py-0.5 rounded-full border border-white/30 bg-white/10 uppercase tracking-widest hidden"></div>
             </div>
 
-            <!-- Chat Area -->
-            <div id="log" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 bg-gray-50/50 custom-scroll">
-            </div>
+            <div id="log" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 bg-gray-50/50"></div>
 
-            <!-- Bottom Area -->
-            <div class="bg-white border-t border-gray-100 z-20 safe-bottom">
+            <div class="bg-white border-t border-gray-100 z-20 pb-safe">
                 <div id="typing" class="hidden px-4 py-2">
-                    <span class="bg-blue-50 text-[#002E7D] text-[10px] px-3 py-1 rounded-full border border-blue-100 font-medium">
-                        Escribiendo<span class="dot">.</span><span class="dot" style="animation-delay: 0.2s">.</span><span class="dot" style="animation-delay: 0.4s">.</span>
-                    </span>
+                    <span class="bg-blue-50 text-[#002E7D] text-[10px] px-3 py-1 rounded-full border border-blue-100">Analizando consulta...</span>
                 </div>
-
                 <div class="p-4 md:p-6 flex gap-2 items-center">
-                    <input id="q" type="text" enterkeyhint="send" autocomplete="off"
-                        class="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#002E7D] text-sm" 
-                        placeholder="Escribe tu mensaje...">
-                    <button id="b" class="bg-[#002E7D] text-white p-3 md:p-4 rounded-2xl shadow-lg active:scale-95 transition-transform shrink-0">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7-7 7M5 12h16" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    </button>
+                    <input id="q" type="text" enterkeyhint="send" autocomplete="off" class="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#002E7D] text-sm" placeholder="Pregunta por manuales o por tus datos...">
+                    <button id="b" class="bg-[#002E7D] text-white p-3 md:p-4 rounded-2xl shadow-lg active:scale-95 transition-transform"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7-7 7M5 12h16" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
                 </div>
             </div>
         </div>
@@ -149,8 +172,9 @@ async def home():
             const q = document.getElementById('q');
             const b = document.getElementById('b');
             const typing = document.getElementById('typing');
+            const badge = document.getElementById('source-badge');
 
-            function addMsg(text, isUser, sources = []) {
+            function addMsg(text, isUser, sources = [], type = "") {
                 const wrapper = document.createElement('div');
                 wrapper.className = isUser ? "flex flex-row-reverse gap-3" : "flex gap-3";
                 
@@ -159,11 +183,10 @@ async def home():
                     sHtml = `
                         <div class="mt-3 pt-2 border-t border-gray-50 flex justify-end">
                             <div class="relative has-tooltip">
-                                <div class="bg-blue-50 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-[10px] cursor-help font-bold border border-blue-100 italic">i</div>
+                                <div class="bg-blue-50 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-[10px] cursor-help font-bold border border-blue-100">i</div>
                                 <div class="tooltip bg-slate-800 text-white p-3 rounded-xl shadow-2xl z-50 text-[10px]">
-                                    <p class="font-bold border-b border-white/10 mb-2 pb-1 text-blue-300">FUENTES Y SIMILITUD:</p>
+                                    <p class="font-bold border-b border-white/10 mb-2 pb-1 text-blue-300">ORIGEN: ${type}</p>
                                     ${sources.map(s => `<div class="flex justify-between mb-1"><span>${s.name}</span><span class="text-blue-300 ml-2">${s.score}%</span></div>`).join('')}
-                                    <div class="absolute top-full right-2 border-8 border-transparent border-t-slate-800"></div>
                                 </div>
                             </div>
                         </div>
@@ -171,10 +194,8 @@ async def home():
                 }
 
                 wrapper.innerHTML = `
-                    <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold text-[10px] shrink-0 border ${isUser?'bg-[#002E7D] text-white border-transparent':'bg-white text-[#002E7D] border-gray-100'}">
-                        ${isUser?'U':'AI'}
-                    </div>
-                    <div class="${isUser?'bg-[#002E7D] text-white rounded-tr-none shadow-blue-900/10':'bg-white border border-gray-100 text-gray-700 rounded-tl-none'} p-4 rounded-2xl shadow-sm text-sm leading-relaxed max-w-[85%]">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold text-[10px] shrink-0 border ${isUser?'bg-[#002E7D] text-white':'bg-white text-[#002E7D]'}">${isUser?'U':'AI'}</div>
+                    <div class="${isUser?'bg-[#002E7D] text-white rounded-tr-none':'bg-white border text-gray-700 rounded-tl-none'} p-4 rounded-2xl shadow-sm text-sm leading-relaxed max-w-[85%]">
                         ${text.replace(/\\n/g, '<br>')}
                         ${sHtml}
                     </div>
@@ -189,6 +210,7 @@ async def home():
                 addMsg(val, true);
                 q.value = '';
                 typing.classList.remove('hidden');
+                badge.classList.add('hidden');
                 log.scrollTop = log.scrollHeight;
 
                 try {
@@ -199,7 +221,12 @@ async def home():
                     });
                     const d = await res.json();
                     typing.classList.add('hidden');
-                    addMsg(d.answer, false, d.sources);
+                    
+                    const sourceLabel = d.salesforce ? "SALESFORCE" : "RAG MANUALES";
+                    badge.innerText = sourceLabel;
+                    badge.classList.remove('hidden');
+
+                    addMsg(d.answer, false, d.sources, sourceLabel);
                 } catch(e) {
                     typing.classList.add('hidden');
                     addMsg("Error de conexión.", false);
@@ -208,7 +235,7 @@ async def home():
 
             b.onclick = ask;
             q.onkeypress = (e) => { if(e.key === 'Enter') ask(); };
-            window.onload = () => setTimeout(() => addMsg("¡Hola! He restaurado todas las funciones (porcentajes, iconos y diseño). ¿En qué puedo ayudarte?", false), 200);
+            window.onload = () => setTimeout(() => addMsg("¡Hola! Soy tu asistente híbrido. Puedes preguntarme por manuales o por tus datos personales de la cuenta.", false), 200);
         </script>
     </body>
     </html>
