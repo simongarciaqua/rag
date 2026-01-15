@@ -21,23 +21,27 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: List[Message] = []
+    flow_step: Optional[str] = None
 
 def clean_key(val):
     if not val: return ""
     if '=' in val: val = val.split('=')[-1]
     return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
 
-async def call_n8n_webhook(query: str):
+async def call_n8n_webhook(query: str, flow_step: Optional[str] = None):
     # Endpoint unificado para todas las consultas del usuario
     url = "https://simongpa11.app.n8n.cloud/webhook-test/stop-reparto"
     async with httpx.AsyncClient() as client:
         try:
-            print(f"DEBUG: Enviando mensaje de usuario a n8n: {query}")
-            # Payload limpio: solo el mensaje actual y source: user
+            print(f"DEBUG: Enviando mensaje de usuario a n8n: {query} (FlowStep: {flow_step})")
+            # Payload limpio: texto actual, source: user y flow_step si existe
             payload = {
                 "query": query,
                 "source": "user"
             }
+            if flow_step:
+                payload["flow_step"] = flow_step
+
             response = await client.post(url, json=payload, timeout=8.0)
             if response.status_code == 200:
                 return response.json()
@@ -61,10 +65,9 @@ async def chat(req: ChatRequest):
         model = genai.GenerativeModel('models/gemini-2.0-flash')
         
         # --- 1. LLAMADA CRÍTICA A N8N (CADA MENSAJE) ---
-        n8n_data = await call_n8n_webhook(req.message)
+        n8n_data = await call_n8n_webhook(req.message, req.flow_step)
         
         # --- 2. BÚSQUEDA RAG (SIEMPRE ACTIVA) ---
-        # Generamos query de búsqueda optimizada
         search_query = req.message
         if req.history:
             history_summary = "\n".join([f"{m.role}: {m.content}" for m in req.history[-2:]])
@@ -126,7 +129,7 @@ async def home():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-        <title>Aquaservice AI v4.6 (n8n Every Message)</title>
+        <title>Aquaservice AI v4.7 (Flow State n8n)</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
         <style>
@@ -139,26 +142,27 @@ async def home():
         <div class="bg-white w-full md:max-w-2xl flex flex-col h-full md:h-[90vh] md:mt-8 md:rounded-3xl shadow-2xl overflow-hidden relative">
             <div class="bg-[#002E7D] p-4 md:p-6 text-white flex justify-between items-center shrink-0">
                 <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl">⚡</div>
+                    <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl">🚀</div>
                     <div>
                         <h1 class="text-base md:text-xl font-bold leading-tight">Aquaservice AI</h1>
-                        <p class="text-blue-200 text-[10px] uppercase font-semibold">v4.6 n8n-First Engine</p>
+                        <p class="text-blue-200 text-[10px] uppercase font-semibold">v4.7 Flow-State Logic</p>
                     </div>
                 </div>
             </div>
             <div id="log" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 bg-gray-50/50"></div>
             <div id="typing" class="hidden px-6 py-2 flex gap-2 items-center text-[#002E7D] text-xs font-medium">
-                <span class="bg-blue-50 px-3 py-1 rounded-full border border-blue-100 italic">Conectando con sistemas...</span>
+                <span class="bg-blue-50 px-3 py-1 rounded-full border border-blue-100 italic font-semibold">Procesando...</span>
             </div>
             <div class="p-4 md:p-6 bg-white border-t border-gray-100 flex gap-2">
                 <input id="q" type="text" enterkeyhint="send" autocomplete="off" class="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#002E7D] text-sm" placeholder="Escribe tu mensaje...">
                 <button id="b" class="bg-[#002E7D] text-white p-3 md:p-4 rounded-2xl shadow-lg active:scale-95 transition-transform shrink-0">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7-7 7M5 12h16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7-7 7M5 12h16" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
             </div>
         </div>
         <script>
             let history = [];
+            let flowStep = null; // Estado del flujo
             const log = document.getElementById('log');
             const q = document.getElementById('q');
             const b = document.getElementById('b');
@@ -181,20 +185,45 @@ async def home():
 
             async function ask() {
                 const val = q.value.trim(); if(!val) return;
-                addMsg(val, true); q.value = '';
+                
+                // Preparamos el payload incluyendo el flowStep actual
+                const payload = {
+                    message: val, 
+                    history: history.slice(-6),
+                    flow_step: flowStep
+                };
+
+                addMsg(val, true); 
+                q.value = '';
                 typing.classList.remove('hidden');
-                const res = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({message: val, history: history.slice(-6)})
-                });
-                const d = await res.json();
-                typing.classList.add('hidden');
-                addMsg(d.answer, false, d.sources);
+
+                try {
+                    const res = await fetch('/api/chat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    const d = await res.json();
+                    typing.classList.add('hidden');
+                    
+                    // REGLA DE NEGOCIO: Si el bot pregunta por el motivo, activamos el estado
+                    if (d.answer.includes("¿Cuál es el motivo del stop?")) {
+                        flowStep = "awaiting_stop_reason";
+                        console.log("DEBUG: FlowStep activado -> awaiting_stop_reason");
+                    } else {
+                        // Limpiamos el estado después de una interacción que no sea la pregunta
+                        flowStep = null;
+                    }
+
+                    addMsg(d.answer, false, d.sources);
+                } catch(e) {
+                    typing.classList.add('hidden');
+                    addMsg("Error de conexión.", false);
+                }
             }
             b.onclick = ask;
             q.onkeypress = (e) => { if(e.key === 'Enter') ask(); };
-            window.onload = () => addMsg("¡Hola! He activado la conexión en tiempo real con n8n para todos tus mensajes.", false);
+            window.onload = () => addMsg("¡Hola! Estoy listo para ayudarte con tus manuales o gestiones de reparto.", false);
         </script>
     </body>
     </html>
