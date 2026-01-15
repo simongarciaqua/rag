@@ -27,26 +27,30 @@ def clean_key(val):
     if '=' in val: val = val.split('=')[-1]
     return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
 
-async def call_salesforce_n8n(query: str):
-    # integración salesforce n8n: "https://simongpa11.app.n8n.cloud/webhook/salesforce-users"
+async def call_n8n_webhook(query: str, history: List[Message]):
+    # Endpoint unificado para todas las consultas
     url = "https://simongpa11.app.n8n.cloud/webhook-test/stop-reparto"
     async with httpx.AsyncClient() as client:
         try:
-            print(f"DEBUG: Llamando a n8n Salesforce con query: {query}")
-            response = await client.post(url, json={"query": query}, timeout=10.0)
-            print(f"DEBUG: n8n respondió con status: {response.status_code}")
+            print(f"DEBUG: Enviando a n8n: {query}")
+            # Enviamos la query y también un resumen del historial para que n8n tenga contexto
+            payload = {
+                "query": query,
+                "user_id": "simon_garcia", # Podríamos dinamizarlo luego
+                "source": "chat_widget_v4.5"
+            }
+            response = await client.post(url, json=payload, timeout=8.0)
             if response.status_code == 200:
-                data = response.json()
-                print(f"DEBUG: Datos recibidos: {json.dumps(data)[:100]}...")
-                return data
-            return {"error": f"Error API: {response.status_code}"}
+                return response.json()
+            return {"status": "no_data", "msg": "n8n sin respuesta activa"}
         except Exception as e:
-            print(f"DEBUG: Error llamando a n8n: {str(e)}")
-            return {"error": str(e)}
+            print(f"DEBUG: Error n8n: {str(e)}")
+            return {"status": "error", "error": str(e)}
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     try:
+        # Inicialización de recursos
         pc_key = clean_key(os.getenv('PINECONE_API_KEY'))
         index_name = clean_key(os.getenv('PINECONE_INDEX_NAME'))
         pc_namespace = clean_key(os.getenv('PINECONE_NAMESPACE', 'default'))
@@ -57,69 +61,59 @@ async def chat(req: ChatRequest):
         genai.configure(api_key=google_key)
         model = genai.GenerativeModel('models/gemini-2.0-flash')
         
-        # --- 1. DETECCIÓN DE INTENCIÓN ---
-        # Decidimos si es RAG (Manuales) o SALESFORCE (Datos de usuario)
-        history_summary = "\n".join([f"{m.role}: {m.content}" for m in req.history[-3:]])
-        intent_prompt = f"""Historial: {history_summary}\nPregunta: {req.message}\n
-        Analiza si el usuario pregunta por:
-        A) Información general, técnica o de procesos (ej: como limpiar, que es Aquaservice, productos).
-        B) Información personal, de su cuenta, sus facturas, o solicita ACCIONES como 'Stop reparto', pausar entregas o cambios en su servicio.
-        Responde SOLO con la letra 'A' o 'B'."""
+        # --- 1. LLAMADA CRÍTICA A N8N (CADA MENSAJE) ---
+        n8n_data = await call_n8n_webhook(req.message, req.history)
         
-        intent_res = model.generate_content(intent_prompt).text.strip()
-        is_salesforce = 'B' in intent_res
+        # --- 2. BÚSQUEDA RAG (SIEMPRE ACTIVA) ---
+        # Generamos query de búsqueda optimizada
+        search_query = req.message
+        if req.history:
+            history_summary = "\n".join([f"{m.role}: {m.content}" for m in req.history[-2:]])
+            rewrite_prompt = f"Basado en: {history_summary}\nReescribe '{req.message}' para búsqueda técnica. SOLO la frase."
+            search_query = model.generate_content(rewrite_prompt).text.strip()
 
-        context_data = ""
+        embed = genai.embed_content(model='models/text-embedding-004', content=search_query, task_type="retrieval_query")
+        results = index.query(vector=embed['embedding'], top_k=5, include_metadata=True, namespace=pc_namespace)
+        
+        context_parts = []
         sources = []
-        source_type = "RAG"
+        seen = set()
+        for m in results.matches:
+            if m.score > 0.4:
+                t = m.metadata.get('text', '')
+                f = m.metadata.get('file_name', 'Manual')
+                if t:
+                    context_parts.append(t)
+                    if f not in seen:
+                        sources.append({"name": f, "score": round(m.score * 100, 1)})
+                        seen.add(f)
+        
+        rag_context = "\n\n".join(context_parts)
 
-        if is_salesforce:
-            # --- RUTA B: SALESFORCE (n8n) ---
-            sf_data = await call_salesforce_n8n(req.message)
-            context_data = f"DATOS DE SALESFORCE (FACTURAS/USUARIO):\n{json.dumps(sf_data, indent=2)}"
-            source_type = "Salesforce"
-            sources = [{"name": "Salesforce API", "score": 100}]
-        else:
-            # --- RUTA A: RAG (Pinecone) ---
-            search_query = req.message
-            if req.history:
-                rewrite_prompt = f"Convierte esta pregunta en una búsqueda para manuales: '{req.message}'. SOLO la búsqueda."
-                search_query = model.generate_content(rewrite_prompt).text.strip()
-
-            embed = genai.embed_content(model='models/text-embedding-004', content=search_query, task_type="retrieval_query")
-            results = index.query(vector=embed['embedding'], top_k=5, include_metadata=True, namespace=pc_namespace)
-            
-            cp = []
-            seen = set()
-            for m in results.matches:
-                if m.score > 0.4:
-                    t = m.metadata.get('text', '')
-                    f = m.metadata.get('file_name', 'Manual')
-                    if t:
-                        cp.append(t)
-                        if f not in seen:
-                            sources.append({"name": f, "score": round(m.score * 100, 1)})
-                            seen.add(f)
-            context_data = "\n\n".join(cp)
-
-        # --- 3. RESPUESTA FINAL ---
+        # --- 3. RESPUESTA FINAL CON COMBINACIÓN DE DATOS ---
         gemini_history = []
         for m in req.history:
             gemini_history.append({"role": "user" if m.role == "user" else "model", "parts": [m.content]})
         
         chat_session = model.start_chat(history=gemini_history)
-        system_instr = f"""Eres un asistente de Aquaservice. 
-        Hoy tienes acceso a esta información recuperada de {source_type}:
-        {context_data}
         
-        Usa estos datos para responder. Si no hay datos relevantes, intenta ayudar con lo que sepas pero indica que no encontraste información específica."""
+        system_instr = f"""Eres un asistente experto de Aquaservice. 
+        Tienes dos fuentes de verdad:
         
-        response = chat_session.send_message(f"{system_instr}\n\nPregunta: {req.message}")
+        1. DATOS EN TIEMPO REAL (n8n): {json.dumps(n8n_data)}
+        2. MANUALES TÉCNICOS (RAG): {rag_context}
+        
+        INSTRUCCIONES:
+        - Si n8n devuelve una confirmación de acción (como un stop de reparto), dalo por hecho y confírmalo al usuario cordialmente.
+        - Si el usuario pregunta algo técnico, usa los manuales.
+        - Sé breve, profesional y directo."""
+        
+        response = chat_session.send_message(f"{system_instr}\n\nUSUARIO: {req.message}")
         
         return {
             "answer": response.text,
-            "rag": not is_salesforce,
-            "salesforce": is_salesforce,
+            "rag": len(context_parts) > 0,
+            "n8n": True,
             "sources": sources
         }
     except Exception as e:
@@ -133,114 +127,75 @@ async def home():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-        <title>Aquaservice AI v4.0 (RAG + Salesforce)</title>
+        <title>Aquaservice AI v4.5 (n8n Every Message)</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
         <style>
             body { font-family: 'Outfit', sans-serif; height: 100dvh; overscroll-behavior: none; }
             .dot { animation: pulse 1.4s infinite; }
             @keyframes pulse { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
-            .tooltip { visibility: hidden; opacity: 0; transition: opacity 0.2s; position: absolute; bottom: 120%; right: 0; width: 200px; }
-            .has-tooltip:hover .tooltip { visibility: visible; opacity: 1; }
         </style>
     </head>
     <body class="bg-gray-100 flex flex-col items-center">
         <div class="bg-white w-full md:max-w-2xl flex flex-col h-full md:h-[90vh] md:mt-8 md:rounded-3xl shadow-2xl overflow-hidden relative">
-            
-            <div class="bg-[#002E7D] p-4 md:p-6 text-white flex justify-between items-center shrink-0 z-30">
+            <div class="bg-[#002E7D] p-4 md:p-6 text-white flex justify-between items-center shrink-0">
                 <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl">🚀</div>
+                    <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl">⚡</div>
                     <div>
                         <h1 class="text-base md:text-xl font-bold leading-tight">Aquaservice AI</h1>
-                        <p class="text-blue-200 text-[10px] uppercase font-semibold">v4.0 Híbrido (RAG + Salesforce)</p>
+                        <p class="text-blue-200 text-[10px] uppercase font-semibold">v4.5 n8n-First Engine</p>
                     </div>
                 </div>
-                <div id="source-badge" class="text-[9px] px-2 py-0.5 rounded-full border border-white/30 bg-white/10 uppercase tracking-widest hidden"></div>
             </div>
-
             <div id="log" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 bg-gray-50/50"></div>
-
-            <div class="bg-white border-t border-gray-100 z-20 pb-safe">
-                <div id="typing" class="hidden px-4 py-2">
-                    <span class="bg-blue-50 text-[#002E7D] text-[10px] px-3 py-1 rounded-full border border-blue-100">Analizando consulta...</span>
-                </div>
-                <div class="p-4 md:p-6 flex gap-2 items-center">
-                    <input id="q" type="text" enterkeyhint="send" autocomplete="off" class="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#002E7D] text-sm" placeholder="Pregunta por manuales o por tus datos...">
-                    <button id="b" class="bg-[#002E7D] text-white p-3 md:p-4 rounded-2xl shadow-lg active:scale-95 transition-transform"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7-7 7M5 12h16" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-                </div>
+            <div id="typing" class="hidden px-6 py-2 flex gap-2 items-center text-[#002E7D] text-xs font-medium">
+                <span class="bg-blue-50 px-3 py-1 rounded-full border border-blue-100 italic">Conectando con sistemas...</span>
+            </div>
+            <div class="p-4 md:p-6 bg-white border-t border-gray-100 flex gap-2">
+                <input id="q" type="text" enterkeyhint="send" autocomplete="off" class="flex-1 bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#002E7D] text-sm" placeholder="Escribe tu mensaje...">
+                <button id="b" class="bg-[#002E7D] text-white p-3 md:p-4 rounded-2xl shadow-lg active:scale-95 transition-transform shrink-0">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7-7 7M5 12h16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
             </div>
         </div>
-
         <script>
             let history = [];
             const log = document.getElementById('log');
             const q = document.getElementById('q');
             const b = document.getElementById('b');
             const typing = document.getElementById('typing');
-            const badge = document.getElementById('source-badge');
 
-            function addMsg(text, isUser, sources = [], type = "") {
-                const wrapper = document.createElement('div');
-                wrapper.className = isUser ? "flex flex-row-reverse gap-3" : "flex gap-3";
-                
-                let sHtml = "";
-                if (!isUser && sources.length > 0) {
-                    sHtml = `
-                        <div class="mt-3 pt-2 border-t border-gray-50 flex justify-end">
-                            <div class="relative has-tooltip">
-                                <div class="bg-blue-50 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-[10px] cursor-help font-bold border border-blue-100">i</div>
-                                <div class="tooltip bg-slate-800 text-white p-3 rounded-xl shadow-2xl z-50 text-[10px]">
-                                    <p class="font-bold border-b border-white/10 mb-2 pb-1 text-blue-300">ORIGEN: ${type}</p>
-                                    ${sources.map(s => `<div class="flex justify-between mb-1"><span>${s.name}</span><span class="text-blue-300 ml-2">${s.score}%</span></div>`).join('')}
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                }
-
-                wrapper.innerHTML = `
+            function addMsg(text, isUser, src = []) {
+                const div = document.createElement('div');
+                div.className = isUser ? "flex flex-row-reverse gap-3" : "flex gap-3";
+                div.innerHTML = `
                     <div class="w-8 h-8 rounded-full flex items-center justify-center font-bold text-[10px] shrink-0 border ${isUser?'bg-[#002E7D] text-white':'bg-white text-[#002E7D]'}">${isUser?'U':'AI'}</div>
                     <div class="${isUser?'bg-[#002E7D] text-white rounded-tr-none':'bg-white border text-gray-700 rounded-tl-none'} p-4 rounded-2xl shadow-sm text-sm leading-relaxed max-w-[85%]">
                         ${text.replace(/\\n/g, '<br>')}
-                        ${sHtml}
+                        ${!isUser && src.length ? `<div class="mt-2 text-[10px] text-blue-400 border-t pt-2 uppercase font-bold">Manuales: ${src.map(s=>s.name).join(', ')}</div>` : ''}
                     </div>
                 `;
-                log.appendChild(wrapper);
+                log.appendChild(div);
                 log.scrollTop = log.scrollHeight;
                 history.push({role: isUser ? "user" : "assistant", content: text});
             }
 
             async function ask() {
                 const val = q.value.trim(); if(!val) return;
-                addMsg(val, true);
-                q.value = '';
+                addMsg(val, true); q.value = '';
                 typing.classList.remove('hidden');
-                badge.classList.add('hidden');
-                log.scrollTop = log.scrollHeight;
-
-                try {
-                    const res = await fetch('/api/chat', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({message: val, history: history.slice(-6)})
-                    });
-                    const d = await res.json();
-                    typing.classList.add('hidden');
-                    
-                    const sourceLabel = d.salesforce ? "SALESFORCE" : "RAG MANUALES";
-                    badge.innerText = sourceLabel;
-                    badge.classList.remove('hidden');
-
-                    addMsg(d.answer, false, d.sources, sourceLabel);
-                } catch(e) {
-                    typing.classList.add('hidden');
-                    addMsg("Error de conexión.", false);
-                }
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: val, history: history.slice(-6)})
+                });
+                const d = await res.json();
+                typing.classList.add('hidden');
+                addMsg(d.answer, false, d.sources);
             }
-
             b.onclick = ask;
             q.onkeypress = (e) => { if(e.key === 'Enter') ask(); };
-            window.onload = () => setTimeout(() => addMsg("¡Hola! Soy tu asistente híbrido. Puedes preguntarme por manuales o por tus datos personales de la cuenta.", false), 200);
+            window.onload = () => addMsg("¡Hola! He activado la conexión en tiempo real con n8n para todos tus mensajes.", false);
         </script>
     </body>
     </html>
