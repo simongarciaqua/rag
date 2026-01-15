@@ -28,15 +28,20 @@ def clean_key(val):
     return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
 
 async def call_salesforce_n8n(query: str):
-    url = "https://simongpa11.app.n8n.cloud/webhook/salesforce-users"
+    # integración salesforce n8n: "https://simongpa11.app.n8n.cloud/webhook/salesforce-users"
+    url = "https://simongpa11.app.n8n.cloud/webhook-test/stop-reparto"
     async with httpx.AsyncClient() as client:
         try:
-            # Enviamos la consulta al webhook de n8n
+            print(f"DEBUG: Llamando a n8n Salesforce con query: {query}")
             response = await client.post(url, json={"query": query}, timeout=10.0)
+            print(f"DEBUG: n8n respondió con status: {response.status_code}")
             if response.status_code == 200:
-                return response.json()
+                data = response.json()
+                print(f"DEBUG: Datos recibidos: {json.dumps(data)[:100]}...")
+                return data
             return {"error": f"Error API: {response.status_code}"}
         except Exception as e:
+            print(f"DEBUG: Error llamando a n8n: {str(e)}")
             return {"error": str(e)}
 
 @app.post("/api/chat")
