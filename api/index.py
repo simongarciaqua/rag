@@ -63,7 +63,7 @@ async def chat(req: ChatRequest):
         intent_prompt = f"""Historial: {history_summary}\nPregunta: {req.message}\n
         Analiza si el usuario pregunta por:
         A) Información general, técnica o de procesos (ej: como limpiar, que es Aquaservice, productos).
-        B) Información personal, de su cuenta, sus facturas o datos de Salesforce (ej: mis datos, mi última factura, quien soy).
+        B) Información personal, de su cuenta, sus facturas, o solicita ACCIONES como 'Stop reparto', pausar entregas o cambios en su servicio.
         Responde SOLO con la letra 'A' o 'B'."""
         
         intent_res = model.generate_content(intent_prompt).text.strip()
