@@ -27,25 +27,24 @@ def clean_key(val):
     if '=' in val: val = val.split('=')[-1]
     return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
 
-async def call_n8n_webhook(query: str, history: List[Message]):
-    # Endpoint unificado para todas las consultas
+async def call_n8n_webhook(query: str):
+    # Endpoint unificado para todas las consultas del usuario
     url = "https://simongpa11.app.n8n.cloud/webhook-test/stop-reparto"
     async with httpx.AsyncClient() as client:
         try:
-            print(f"DEBUG: Enviando a n8n: {query}")
-            # Enviamos la query y también un resumen del historial para que n8n tenga contexto
+            print(f"DEBUG: Enviando mensaje de usuario a n8n: {query}")
+            # Payload limpio: solo el mensaje actual y source: user
             payload = {
                 "query": query,
-                "user_id": "simon_garcia", # Podríamos dinamizarlo luego
-                "source": "chat_widget_v4.5"
+                "source": "user"
             }
             response = await client.post(url, json=payload, timeout=8.0)
             if response.status_code == 200:
                 return response.json()
-            return {"status": "no_data", "msg": "n8n sin respuesta activa"}
+            return {"status": "no_data"}
         except Exception as e:
             print(f"DEBUG: Error n8n: {str(e)}")
-            return {"status": "error", "error": str(e)}
+            return {"status": "error"}
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
@@ -62,7 +61,7 @@ async def chat(req: ChatRequest):
         model = genai.GenerativeModel('models/gemini-2.0-flash')
         
         # --- 1. LLAMADA CRÍTICA A N8N (CADA MENSAJE) ---
-        n8n_data = await call_n8n_webhook(req.message, req.history)
+        n8n_data = await call_n8n_webhook(req.message)
         
         # --- 2. BÚSQUEDA RAG (SIEMPRE ACTIVA) ---
         # Generamos query de búsqueda optimizada
@@ -127,7 +126,7 @@ async def home():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-        <title>Aquaservice AI v4.5 (n8n Every Message)</title>
+        <title>Aquaservice AI v4.6 (n8n Every Message)</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
         <style>
@@ -143,7 +142,7 @@ async def home():
                     <div class="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center text-xl">⚡</div>
                     <div>
                         <h1 class="text-base md:text-xl font-bold leading-tight">Aquaservice AI</h1>
-                        <p class="text-blue-200 text-[10px] uppercase font-semibold">v4.5 n8n-First Engine</p>
+                        <p class="text-blue-200 text-[10px] uppercase font-semibold">v4.6 n8n-First Engine</p>
                     </div>
                 </div>
             </div>
