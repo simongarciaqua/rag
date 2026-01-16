@@ -33,7 +33,7 @@ async def call_n8n_webhook(query: str, flow_step: Optional[str] = None):
     Regla 1 y 3: Cada mensaje del usuario va al webhook con query y source: user.
     Regla 4: Se incluye flow_step si existe.
     """
-    url = "https://simongpa11.app.n8n.cloud/webhook-test/salesforce-users"
+    url = "https://simongpa11.app.n8n.cloud/webhook/salesforce-users"
     async with httpx.AsyncClient() as client:
         try:
             payload = {
