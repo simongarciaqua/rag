@@ -79,37 +79,46 @@ async def chat(req: ChatRequest):
         rag_context = "\n".join([m.metadata.get('text', '') for m in results.matches if m.score > 0.45])
 
         # --- 3. LÓGICA DE RESPUESTA ---
-        # El backend (n8n) decide la lógica, Gemini la comunica cordialmente.
         system_instr = f"""Eres el asistente de Aquaservice. 
         REGLAS DE RESPUESTA:
         1. Tu lógica principal viene de n8n: {json.dumps(n8n_data)}
         2. Tu conocimiento técnico viene de RAG: {rag_context}
         
-        Si n8n indica que se requiere el motivo, pregunta exactamente: '¿Cuál es el motivo del stop?'
-        Si n8n ya confirma una acción, comunícala al usuario.
-        Si no hay información en n8n ni RAG, responde amablemente que no puedes ayudar con eso todavía."""
+        INSTRUCCIONES:
+        - Si n8n indica que se requiere el motivo, pregunta exactamente: '¿Cuál es el motivo del stop?'
+        - Si n8n confirma una acción o da datos del cliente, úsalos.
+        - Indica al final de tu respuesta, en una línea nueva, cuál fuente usaste principalmente: [SOURCE:N8N] o [SOURCE:RAG] o [SOURCE:NONE]."""
         
-        # Regla 2: El historial se usa para el modelo, pero NUNCA se envía el historial a n8n.
         gemini_history = [{"role": "user" if m.role == "user" else "model", "parts": [m.content]} for m in req.history]
         chat_session = model.start_chat(history=gemini_history)
-        response = chat_session.send_message(f"{system_instr}\n\nUsuario dice: {req.message}")
+        full_res = chat_session.send_message(f"{system_instr}\n\nUsuario dice: {req.message}").text
         
+        # Extraemos la respuesta y el tag de fuente
+        answer = full_res.split("[SOURCE:")[0].strip()
+        used_source = "RAG"
+        if "[SOURCE:N8N]" in full_res: used_source = "N8N"
+        elif "[SOURCE:NONE]" in full_res: used_source = "NONE"
+
         # --- 4. GESTIÓN DE ESTADO (FLOW_STEP) ---
         new_flow_step = None
-        
-        # Normalizamos n8n_data si viene como lista (común en n8n)
         resolved_n8n = n8n_data[0] if isinstance(n8n_data, list) and len(n8n_data) > 0 else n8n_data
         
-        # Si n8n nos manda un flag o si Gemini genera la pregunta clave
-        if "¿Cuál es el motivo del stop?" in response.text:
+        if "¿Cuál es el motivo del stop?" in answer:
             new_flow_step = "awaiting_stop_reason"
         elif isinstance(resolved_n8n, dict) and resolved_n8n.get("next_step") == "awaiting_stop_reason":
             new_flow_step = "awaiting_stop_reason"
 
+        # --- 5. FILTRADO DE FUENTES PARA EL FRONTEND ---
+        final_sources = []
+        if used_source == "N8N":
+            final_sources = [{"name": "Integración Salesforce / n8n", "score": 100}]
+        elif used_source == "RAG":
+            final_sources = [{"name": m.metadata.get('file_name', 'Manual'), "score": round(m.score*100,1)} for m in results.matches if m.score > 0.45]
+
         return {
-            "answer": response.text,
+            "answer": answer,
             "flow_step": new_flow_step,
-            "sources": [{"name": m.metadata.get('file_name', 'Manual'), "score": round(m.score*100,1)} for m in results.matches if m.score > 0.45]
+            "sources": final_sources
         }
     except Exception as e:
         return {"answer": f"❌ Error: {str(e)}", "flow_step": None}
