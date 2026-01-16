@@ -154,13 +154,30 @@ async def home():
             let history = [];
             let currentFlowStep = null; // ESTADO LOCAL flow_step
 
-            function addMsg(text, isUser) {
+            function addMsg(text, isUser, sources = []) {
                 const div = document.createElement('div');
                 div.className = isUser ? "flex flex-row-reverse gap-3" : "flex gap-3";
+                
+                let sHtml = "";
+                if (!isUser && sources && sources.length > 0) {
+                    sHtml = `
+                        <div class="mt-3 pt-2 border-t border-gray-100 flex justify-end">
+                            <div class="relative has-tooltip group">
+                                <div class="bg-blue-50 text-blue-600 rounded-full w-5 h-5 flex items-center justify-center text-[10px] cursor-help font-bold border border-blue-100">i</div>
+                                <div class="tooltip invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800 text-white p-3 rounded-xl shadow-2xl absolute bottom-full right-0 mb-2 w-48 z-50 text-[10px]">
+                                    <p class="font-bold border-b border-white/10 mb-2 pb-1 text-blue-300 uppercase">Fuentes de conocimiento</p>
+                                    ${sources.map(s => `<div class="flex justify-between mb-1"><span>${s.name}</span><span class="text-blue-300 ml-2">${s.score}%</span></div>`).join('')}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
                 div.innerHTML = `
                     <div class="w-8 h-8 rounded-full flex items-center justify-center text-[10px] shrink-0 ${isUser?'bg-[#002E7D] text-white':'bg-white border text-[#002E7D]'} font-bold">${isUser?'U':'AI'}</div>
                     <div class="${isUser?'bg-[#002E7D] text-white rounded-tr-none':'bg-white border text-gray-700 rounded-tl-none'} p-4 rounded-2xl text-sm max-w-[85%] shadow-sm">
                         ${text.replace(/\\n/g, '<br>')}
+                        ${sHtml}
                     </div>
                 `;
                 document.getElementById('log').appendChild(div);
@@ -183,17 +200,14 @@ async def home():
                         body: JSON.stringify({
                             message: val, 
                             history: history.slice(-6),
-                            flow_step: currentFlowStep // ENVIAMOS EL ESTADO ACTUAL
+                            flow_step: currentFlowStep
                         })
                     });
                     const d = await res.json();
                     
-                    // ACTUALIZACIÓN DEL ESTADO SEGÚN EL BACKEND
                     currentFlowStep = d.flow_step;
-                    console.log("DEBUG: Nuevo estado flow_step:", currentFlowStep);
-
                     document.getElementById('typing').classList.add('hidden');
-                    addMsg(d.answer, false);
+                    addMsg(d.answer, false, d.sources);
                 } catch(e) {
                     document.getElementById('typing').classList.add('hidden');
                     addMsg("Error técnico.", false);
