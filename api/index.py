@@ -96,10 +96,14 @@ async def chat(req: ChatRequest):
         
         # --- 4. GESTIÓN DE ESTADO (FLOW_STEP) ---
         new_flow_step = None
+        
+        # Normalizamos n8n_data si viene como lista (común en n8n)
+        resolved_n8n = n8n_data[0] if isinstance(n8n_data, list) and len(n8n_data) > 0 else n8n_data
+        
         # Si n8n nos manda un flag o si Gemini genera la pregunta clave
         if "¿Cuál es el motivo del stop?" in response.text:
             new_flow_step = "awaiting_stop_reason"
-        elif n8n_data.get("next_step") == "awaiting_stop_reason":
+        elif isinstance(resolved_n8n, dict) and resolved_n8n.get("next_step") == "awaiting_stop_reason":
             new_flow_step = "awaiting_stop_reason"
 
         return {
