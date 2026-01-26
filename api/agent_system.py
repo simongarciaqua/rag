@@ -21,9 +21,9 @@ def clean_key(val):
     return re.sub(r'[\s\n\r\t]', '', val).strip("'\" ")
 
 # Paths
-BASE_DIR = "/Users/simongarciapascual/Pinecone"
-STOP_RULES_PATH = os.path.join(BASE_DIR, "stop_reparto/rules_stop_reparto.json")
-URGENT_RULES_PATH = os.path.join(BASE_DIR, "aviso_urgente/rules_aviso_urgente.json")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STOP_RULES_PATH = os.path.join(BASE_DIR, "stop_reparto", "rules_stop_reparto.json")
+URGENT_RULES_PATH = os.path.join(BASE_DIR, "aviso_urgente", "rules_aviso_urgente.json")
 
 class AgentSystem:
     def __init__(self):
