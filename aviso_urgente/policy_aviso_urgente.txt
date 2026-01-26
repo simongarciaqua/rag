@@ -1,0 +1,58 @@
+MANUAL OPERATIVO - AVISO URGENTE
+================================
+
+5. AVISO URGENTE (Escenario 5)
+-----------------------------
+Objetivo: Generar un aviso urgente para el cliente cuando cumple con las condiciones requeridas.
+
+VALIDACIONES PREVIAS (Para llegar a este punto):
+- NO es su día de Reparto.
+- NO tiene Albarán USUAL pendiente.
+- NO tiene Albarán CRM pendiente.
+- Aviso permitido en zona: SÍ.
+- Próximo reparto > 48 horas.
+
+FLUJO DE GESTIÓN:
+1. SOLICITUD DE DATOS:
+   "¿Qué producto necesitas y qué cantidad?"
+
+2. VALIDACIÓN DE MÍNIMOS:
+   - Agua: Mínimo 1 Botella.
+   - Café: Mínimo 3 cajas.
+   
+   SI NO CUMPLE MÍNIMOS:
+   - Informar al cliente y pedir ajuste.
+   - Agua: "Para poder gestionar tu aviso urgente necesito un mínimo de 1 Botella. ¿Quieres ajustar tu pedido?"
+   - Café: "Para poder gestionar tu aviso urgente necesito un mínimo de 3 cajas de café. ¿Quieres ajustar tu pedido?"
+
+   SI CUMPLE MÍNIMOS:
+   - Proceder a la creación.
+
+3. INFORMACIÓN DE PLAZO:
+   - Informar siempre del plazo según zona.
+   - "El plazo de entrega del aviso urgente en tu zona es de {horas_zona} horas"
+
+4. CREACIÓN Y CONFIRMACIÓN:
+   - "Estoy generando tu aviso urgente."
+   - "Tu aviso urgente ha sido registrado correctamente."
+   - Despedida: "Gracias por llamar a Aquaservice. Que tengas un buen día."
+
+ESCENARIOS DE RECHAZO (INFORMACIÓN):
+- Escenario 1 (Día de reparto): 
+    - Validar `route_type` en el CONTEXTO DEL CLIENTE.
+    - SI es "Megaruta" -> El horario es "07:30 a 21:30".
+    - SI es "Normal" (o vacío) -> El horario es "08:00 a 17:00".
+    - Speech OBLIGATORIO: "He comprobado tu contrato y hoy es tu día de reparto. Tu entrega está prevista dentro del horario de {HORARIO_IDENTIFICADO}."
+    - Ejemplo: "...prevista dentro del horario de 07:30 a 21:30."
+
+- Escenario 2 (Albarán USUAL pendiente): "Tu entrega está en curso/retraso/reagendada..."
+- Escenario 3 (Albarán CRM pendiente):
+    - Validar `pending_crm_hours`.
+    - CASO <= 48h: Decision `rechazo_crm_en_plazo`.
+      Speech: "Tu entrega está dentro del plazo. Dentro de las 48 Horas recibirás la visita del Repartidor. ¿Deseas dejar algún mensaje al repartidor?"
+    - CASO > 48h: Decision `rechazo_crm_retraso`.
+      Speech: "Hemos detectado un retraso en tu entrega. Pasamos nota al Repartidor para que pueda entregarse lo antes posible. ¿Deseas dejar algún mensaje al repartidor?"
+      
+- Escenario 4 (Zona no permitida o Reparto < 48h): 
+    - Zona: "Entiendo tu situación, en tu zona no podemos generar avisos urgentes porque nuestros almacenes se encuentran en zonas alejadas."
+    - Reparto < 48h: "Tu próximo reparto se realizará dentro de las próximas 48 horas, previsto para el día {fecha_reparto}. Por este motivo no es recomendable ponerte un aviso urgente."

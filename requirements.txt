@@ -11,3 +11,9 @@ fastapi
 uvicorn
 pydantic
 httpx
+langchain
+langchain-community
+langchain-text-splitters
+langchain-google-genai
+simple-salesforce
+beautifulsoup4

@@ -1,0 +1,184 @@
+{
+    "process": "AVISO_URGENTE",
+    "version": "1.0",
+    "required_fields": [
+        "producto",
+        "cantidad"
+    ],
+    "missing_info_behavior": {
+        "status": "NEED_INFO",
+        "questions": {
+            "producto": {
+                "question": "¿Qué producto necesitas para tu aviso urgente? (Agua o Café)",
+                "type": "single_choice",
+                "options": [
+                    {
+                        "value": "agua",
+                        "label": "Agua"
+                    },
+                    {
+                        "value": "cafe",
+                        "label": "Café"
+                    }
+                ]
+            },
+            "cantidad": {
+                "question": "¿Qué cantidad necesitas?",
+                "type": "text"
+            }
+        }
+    },
+    "rules": [
+        {
+            "id": "AU_MINIMO_AGUA",
+            "description": "Validar mínimo de agua (1 botella)",
+            "when": {
+                "producto": "agua",
+                "cantidad": {
+                    "max": 0
+                }
+            },
+            "then": {
+                "decision": "rechazo_minimo",
+                "stop_allowed": false,
+                "reason": "minimo_agua_1",
+                "allowed_actions": [
+                    "ajustar_pedido"
+                ]
+            },
+            "priority": 110
+        },
+        {
+            "id": "AU_MINIMO_CAFE",
+            "description": "Validar mínimo de café (3 cajas)",
+            "when": {
+                "producto": "cafe",
+                "cantidad": {
+                    "max": 2
+                }
+            },
+            "then": {
+                "decision": "rechazo_minimo",
+                "stop_allowed": false,
+                "reason": "minimo_cafe_3",
+                "allowed_actions": [
+                    "ajustar_pedido"
+                ]
+            },
+            "priority": 110
+        },
+        {
+            "id": "AU_DIA_REPARTO",
+            "description": "Si es día de reparto, no permitir aviso urgente",
+            "when": {
+                "is_delivery_day": true
+            },
+            "then": {
+                "decision": "rechazo_dia_reparto",
+                "stop_allowed": false,
+                "reason": "es_dia_reparto"
+            },
+            "priority": 100
+        },
+        {
+            "id": "AU_ALBARAN_USUAL",
+            "description": "Si tiene albarán usual pendiente",
+            "when": {
+                "has_pending_usual_delivery": true
+            },
+            "then": {
+                "decision": "rechazo_albaran_pendiente",
+                "stop_allowed": false,
+                "reason": "albaran_usual_pendiente"
+            },
+            "priority": 90
+        },
+        {
+            "id": "AU_ALBARAN_CRM_EN_PLAZO",
+            "description": "Albarán CRM pendiente <= 48h",
+            "when": {
+                "has_pending_crm_delivery": true,
+                "pending_crm_hours": {
+                    "max": 48
+                }
+            },
+            "then": {
+                "decision": "rechazo_crm_en_plazo",
+                "stop_allowed": false,
+                "reason": "albaran_crm_en_plazo"
+            },
+            "priority": 95
+        },
+        {
+            "id": "AU_ALBARAN_CRM_RETRASO",
+            "description": "Albarán CRM pendiente > 48h",
+            "when": {
+                "has_pending_crm_delivery": true,
+                "pending_crm_hours": {
+                    "min": 49
+                }
+            },
+            "then": {
+                "decision": "rechazo_crm_retraso",
+                "stop_allowed": false,
+                "reason": "albaran_crm_retraso"
+            },
+            "priority": 95
+        },
+        {
+            "id": "AU_ALBARAN_CRM_DEFAULT",
+            "description": "Fallback si no se especifica hora (default a en plazo)",
+            "when": {
+                "has_pending_crm_delivery": true
+            },
+            "then": {
+                "decision": "rechazo_crm_en_plazo",
+                "stop_allowed": false,
+                "reason": "albaran_crm_pendiente"
+            },
+            "priority": 90
+        },
+        {
+            "id": "AU_ZONA_NO_PERMITIDA",
+            "description": "Si la zona no permite avisos urgentes",
+            "when": {
+                "urgent_notice_allowed_zone": false
+            },
+            "then": {
+                "decision": "rechazo_zona",
+                "stop_allowed": false,
+                "reason": "zona_no_permitida"
+            },
+            "priority": 80
+        },
+        {
+            "id": "AU_PROXIMO_REPARTO_CERCA",
+            "description": "Si el próximo reparto es en menos de 48h",
+            "when": {
+                "next_delivery_hours": {
+                    "max": 48
+                }
+            },
+            "then": {
+                "decision": "rechazo_proximo_reparto_cerca",
+                "stop_allowed": false,
+                "reason": "proximo_reparto_48h"
+            },
+            "priority": 70
+        },
+        {
+            "id": "AU_PERMITIDO",
+            "description": "Si pasa todas las validaciones (default, si no cae en las anteriores)",
+            "when": {},
+            "then": {
+                "decision": "aviso_urgente_permitido",
+                "stop_allowed": true,
+                "allowed_actions": [
+                    "crear_aviso"
+                ],
+                "reason": "cumple_requisitos"
+            },
+            "priority": 10
+        }
+    ]
+}

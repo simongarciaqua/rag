@@ -1,92 +1,82 @@
 import logging
-import google.generativeai as genai
+import uuid
 from typing import List, Dict, Any
+from bs4 import BeautifulSoup
+
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from .config import Config
 
 logger = logging.getLogger("rag_sync.ingestion")
 
 class Processor:
-    def __init__(self, google_api_key: str):
-        genai.configure(api_key=google_api_key)
+    def __init__(self, api_key: str):
+        self.embeddings_model = GoogleGenerativeAIEmbeddings(
+            model="models/text-embedding-004",
+            google_api_key=api_key
+        )
+        # LangChain Chunker: Más inteligente que un split simple
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=Config.CHUNK_SIZE,
+            chunk_overlap=Config.CHUNK_OVERLAP,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
 
-    def chunk_text(self, text: str, chunk_size: int = 3000, chunk_overlap: int = 400) -> List[str]:
-        """
-        Simple character-based chunking.
-        """
-        if not text:
-            return []
-            
-        chunks = []
-        start = 0
-        text_len = len(text)
+    def clean_html(self, html_content: str) -> str:
+        """Convierte HTML de Salesforce Knowledge en texto plano limpio."""
+        if not html_content:
+            return ""
+        soup = BeautifulSoup(html_content, "html.parser")
+        # Eliminar scripts y estilos
+        for script in soup(["script", "style"]):
+            script.extract()
         
-        while start < text_len:
-            end = min(start + chunk_size, text_len)
-            chunks.append(text[start:end])
-            
-            if end == text_len:
-                break
-                
-            start += (chunk_size - chunk_overlap)
-            
-        return chunks
+        # Obtener texto con saltos de línea coherentes
+        text = soup.get_text(separator='\n')
+        
+        # Limpiar espacios en blanco extra
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        return text
 
-    def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """
-        Embeds a list of texts using Google Gemini.
-        """
-        if not texts:
+    def process_content(self, text_content: str, metadata: Dict[str, Any], is_html: bool = False) -> List[Dict[str, Any]]:
+        """Limpia, trocea y genera embeddings para cualquier contenido."""
+        
+        # 1. Limpieza si es necesario
+        if is_html:
+            text_content = self.clean_html(text_content)
+        
+        if not text_content or len(text_content) < 10:
             return []
-            
+
+        # 2. Chunking con LangChain
+        chunks = self.text_splitter.split_text(text_content)
+        logger.info(f"Contenido dividido en {len(chunks)} chunks.")
+
+        # 3. Generar Embeddings masivos
         try:
-            # Gemini SDK handles batching but has limits per request (usually 100).
-            # We'll batch it just in case our chunk lists are huge.
-            batch_size = 100
-            all_embeddings = []
-            
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i+batch_size]
-                
-                # embed_content can take a list for 'content'
-                result = genai.embed_content(
-                    model=Config.EMBEDDING_MODEL,
-                    content=batch,
-                    task_type="retrieval_document"
-                )
-                
-                # result['embedding'] is a list of lists if input is a list
-                if 'embedding' in result:
-                    all_embeddings.extend(result['embedding'])
-                    
-            return all_embeddings
-
+            # LangChain maneja el batching automáticamente
+            embeddings = self.embeddings_model.embed_documents(chunks)
         except Exception as e:
-            logger.error(f"Embedding failed: {e}")
-            raise
+            logger.error(f"Error generando embeddings: {e}")
+            return []
 
-    def process_file(self, content: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Takes raw file content and metadata, chunks it, embeds it,
-        and returns a list of vector records ready for Pinecone.
-        Format: { "id": str, "values": List[float], "metadata": Dict }
-        """
-        chunks = self.chunk_text(content, Config.CHUNK_SIZE, Config.CHUNK_OVERLAP)
-        logger.info(f"Generated {len(chunks)} chunks for file {metadata.get('file_id')}")
-        
-        embeddings = self.embed_batch(chunks)
-        
+        # 4. Formatear para Pinecone
         vectors = []
-        for i, (chunk_text, vector) in enumerate(zip(chunks, embeddings)):
-            chunk_id = f"{metadata['file_id']}_{i}"
+        for i, (chunk_text, embedding) in enumerate(zip(chunks, embeddings)):
+            vector_id = f"{metadata['file_id']}_{i}"
             
-            # Enrich metadata
+            # Combinamos metadata original con el texto del chunk
             chunk_metadata = metadata.copy()
-            chunk_metadata['chunk_index'] = i
-            chunk_metadata['text'] = chunk_text 
+            chunk_metadata["text"] = chunk_text
+            chunk_metadata["chunk_index"] = i
             
             vectors.append({
-                "id": chunk_id,
-                "values": vector,
+                "id": vector_id,
+                "values": embedding,
                 "metadata": chunk_metadata
             })
             

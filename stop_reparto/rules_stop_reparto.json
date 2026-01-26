@@ -1,0 +1,201 @@
+{
+    "process": "STOP_REPARTO",
+    "version": "1.2",
+    "required_fields": [
+        "motivo",
+        "plan",
+        "canal"
+    ],
+    "missing_info_behavior": {
+        "status": "NEED_INFO",
+        "questions": {
+            "motivo": {
+                "question": "Para poder ayudarte, ¿cuál es el motivo por el que deseas paralizar tu reparto programado?",
+                "type": "single_choice",
+                "options": [
+                    {
+                        "value": "exceso_agua",
+                        "label": "Tengo agua acumulada"
+                    },
+                    {
+                        "value": "ausencia_vacaciones",
+                        "label": "Ausencia o vacaciones"
+                    },
+                    {
+                        "value": "otro",
+                        "label": "Otro motivo"
+                    }
+                ]
+            },
+            "plan": {
+                "question": "¿Qué plan tiene contratado el cliente?",
+                "type": "single_choice",
+                "options": [
+                    {
+                        "value": "Ahorro",
+                        "label": "Plan Ahorro (Cada 4 semanas)"
+                    },
+                    {
+                        "value": "Planocho",
+                        "label": "PlanOcho (Cada 8 semanas)"
+                    }
+                ]
+            },
+            "canal": {
+                "question": "¿Por qué canal estás atendiendo al cliente?",
+                "type": "single_choice",
+                "options": [
+                    {
+                        "value": "Chat",
+                        "label": "Chat / WhatsApp"
+                    },
+                    {
+                        "value": "Telefono",
+                        "label": "Llamada Telefónica"
+                    }
+                ]
+            }
+        }
+    },
+    "rules": [
+        {
+            "id": "SR_ALBARAN_DESCARGADO",
+            "description": "Si el albarán está descargado, procedimiento de mismo día (RZ)",
+            "when": {
+                "albaran_descargado": true
+            },
+            "then": {
+                "decision": "procedimiento_rz",
+                "stop_allowed": true,
+                "allowed_actions": [
+                    "notificar_rz",
+                    "plan_flexible_temporal"
+                ],
+                "reason": "albaran_descargado_mismo_dia"
+            },
+            "priority": 200
+        },
+        {
+            "id": "SR_RECONDUCCION_AHORRO",
+            "description": "Reconducción obligatoria para Plan Ahorro con exceso de agua",
+            "when": {
+                "plan": "Ahorro",
+                "motivo": "exceso_agua"
+            },
+            "then": {
+                "decision": "reconduccion",
+                "stop_allowed": false,
+                "allowed_actions": [
+                    "combinar_cafe_minis",
+                    "reduccion_unidades",
+                    "cambio_11l",
+                    "cambio_planocho"
+                ],
+                "reason": "reconduccion_obligatoria_ahorro"
+            },
+            "priority": 100
+        },
+        {
+            "id": "SR_RECONDUCCION_PLANOCHO",
+            "description": "Reconducción para PlanOcho con exceso de agua",
+            "when": {
+                "plan": "Planocho",
+                "motivo": "exceso_agua"
+            },
+            "then": {
+                "decision": "reconduccion",
+                "stop_allowed": false,
+                "allowed_actions": [
+                    "combinar_agua_cafe",
+                    "reduccion_unidades_planocho",
+                    "cambio_planocho_11l"
+                ],
+                "reason": "reconduccion_obligatoria_planocho"
+            },
+            "priority": 100
+        },
+        {
+            "id": "SR_VACACIONES",
+            "description": "Gestión por vacaciones o ausencia",
+            "when": {
+                "motivo": "ausencia_vacaciones"
+            },
+            "then": {
+                "decision": "retencion",
+                "stop_allowed": true,
+                "allowed_actions": [
+                    "stop_completo",
+                    "traslado_verano",
+                    "cambio_ruta_puntual"
+                ],
+                "reason": "ausencia_vacaciones"
+            },
+            "priority": 90
+        },
+        {
+            "id": "SR_SCORING_ALTO_AHORRO",
+            "description": "Stop 0€ para Plan Ahorro con scoring alto",
+            "when": {
+                "plan": "Ahorro",
+                "scoring": {
+                    "min": 4
+                },
+                "stops_ultimo_ano": {
+                    "max": 1
+                }
+            },
+            "then": {
+                "allow_stop_0euros": true,
+                "stop_allowed": true,
+                "allowed_actions": [
+                    "stop_0euros",
+                    "stop_completo"
+                ],
+                "reason": "elegible_stop_0euros"
+            },
+            "priority": 80
+        },
+        {
+            "id": "SR_SCORING_BAJO_AHORRO",
+            "description": "Stop 4,90€ para Plan Ahorro con scoring bajo o medio",
+            "when": {
+                "plan": "Ahorro",
+                "scoring": {
+                    "max": 3.9
+                },
+                "stops_ultimo_ano": {
+                    "max": 1
+                }
+            },
+            "then": {
+                "allow_stop_0euros": false,
+                "stop_allowed": true,
+                "allowed_actions": [
+                    "stop_cuota_490",
+                    "stop_completo"
+                ],
+                "reason": "stop_cuota_490_por_scoring"
+            },
+            "priority": 70
+        },
+        {
+            "id": "SR_PLANOCHO_CUOTA",
+            "description": "PlanOcho siempre tiene cuota de 9,90€",
+            "when": {
+                "plan": "Planocho",
+                "stops_ultimo_ano": {
+                    "max": 0
+                }
+            },
+            "then": {
+                "allow_stop_0euros": false,
+                "stop_allowed": true,
+                "allowed_actions": [
+                    "stop_cuota_990"
+                ],
+                "reason": "planocho_cuota_fija"
+            },
+            "priority": 70
+        }
+    ]
+}

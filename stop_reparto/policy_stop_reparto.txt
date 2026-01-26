@@ -1,0 +1,70 @@
+MANUAL OPERATIVO - GESTIÓN STOP REPARTO
+========================================
+
+25. STOP Reparto
+----------------
+Intención: Gestión_stop_Reparto_
+
+25.1. RECONDUCCIÓN DEL SERVICIO - PREVIO A SOLICITUD
+Al recibir solicitudes de stop, DEBE realizarse la reconducción mediante alternativas previas.
+
+SPEECH DE APERTURA: 
+“Para poder ayudarte, ¿cuál es el motivo por el que deseas paralizar tu reparto programado?”
+
+A) MOTIVO: EXCESO DE AGUA (ACUMULADA)
+Preguntas de sondeo: ¿Situación puntual?, ¿Consumo real?, ¿Cuánta agua acumulada?, ¿Habitualmente?
+
+A.1) OPCIONES DE RECONDUCCIÓN SEGÚN PLAN:
+
+PLAN AHORRO (Cada 4 semanas):
+1. Combinar 20L con minis y/o café.
+2. Reducción de unidades del Plan Ahorro.
+3. Cambio a plan de 11L (3 a 6 unidades).
+4. Cambio a PlanOcho (cada 8 semanas).
+5. SI NO ACEPTA NINGUNA: Ofrecer Stop Cuota Mínima.
+   - Stop 4,90€ (Scoring 0,5 a 3,5): Máx 2 al año.
+   - Stop 0€ (Scoring 4 a 5): Máx 2 al año.
+   - 3er Stop por disconformidad: 4,90€ (Scoring 2,5 a 5).
+
+PLANOCHO (Cada 8 semanas):
+1. Combinar agua con café.
+2. Reducir unidades del PlanOcho (3 a 6).
+3. Cambio a PlanOcho formato 11L.
+4. SI NO ACEPTA NINGUNA: Ofrecer Stop Cuota Mínima.
+   - Siempre 9,90€: Máximo 1 al año (independiente del scoring).
+
+A.2) FCR (Solución Primer Contacto):
+Si acepta reconducción pero aún sobra agua -> Aplicar Stop Cuota como FCR:
+- Plan Ahorro: 4,90€ (si no conforme, 0€).
+- PlanOcho: Siempre 9,90€.
+
+B) MOTIVO: AUSENCIA O VACACIONES
+Sondeo: ¿Cuánto tiempo?, ¿Mover fecha?, ¿Dirección verano?
+
+B.1) OPCIONES:
+1. Stop Plan Completo (botellas pasan a saldo).
+2. Traslado de verano (min 15 días, max 30 días).
+3. Cambio de ruta puntual (+/- 5 días).
+4. No quiere opciones -> Stop Cuota Mínima (Mismas reglas de Scoring que Punto A.1).
+
+25.2. STOP COMPLETO (ALBARÁN NO DESCARGADO)
+- Botellas pasan a saldo (máximo saldo = doble de contratadas).
+- Factura se emite 24h después de la fecha programada.
+
+25.3. STOP CUOTA (ALBARÁN NO DESCARGADO)
+- No factura plan, solo cuota (4,90€ residencial / 9,90€ PlanOcho).
+
+25.4. STOP CUOTA - MISMO DÍA (ALBARÁN DESCARGADO)
+- Informar a repartidor (RZ) "NO PASAR".
+- Activar Plan Flexible Temporal en CRM (0€, 4,05€ o 8,18€ sin IVA según scoring).
+
+25.5. STOP COMPLETO - MISMO DÍA (ALBARÁN DESCARGADO)
+- Informar a repartidor (RZ). Factura se emite y botellas pasan a saldo.
+
+25.6. APLICACIÓN STOP 0€ (SCORING ALTO)
+- Scoring 4-5 estrellas: Máximo 2 al año.
+- Excepción FCR (Scoring 2.5-3.5): 1 al año permitido.
+
+25.10. CLIENTE FUSIÓN
+- Dirección Principal vs Secundaria.
+- Stop Cuota en Principal depende de si Secundaria ya tuvo reparto.
