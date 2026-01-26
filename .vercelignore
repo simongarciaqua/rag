@@ -1,0 +1,9 @@
+venv/
+rag_sync/
+.gemini/
+__pycache__/
+*.log
+sync_state.json
+debug_*.py
+server.py
+server.log
